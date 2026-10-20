@@ -6,7 +6,12 @@ Tableau de bord Windows pour le Raspberry Pi multi-fonctions **F4JCF-SDR-STATION
 ## Fonctionnalités
 
 - **Météo** — relevé local (`meteo_local.py`, port 5001)
-- **Trafic aérien (ADS-B)** — liste des avions détectés (`readsb`/`tar1090`, port 8504)
+- **Trafic aérien (ADS-B)** — liste des avions détectés (`readsb`/`tar1090`, port 8504),
+  carte interactive avec icônes orientées/colorées par altitude, traînées de
+  vol, recherche par indicatif/hex, et fiche détaillée au clic (compagnie,
+  type d'appareil, immatriculation et photo via les services publics
+  [hexdb.io](https://hexdb.io) et [planespotters.net](https://www.planespotters.net) —
+  nécessite une connexion Internet sur le PC qui fait tourner l'application)
 - **Services** — état des services système : AIS, Direwolf, météo locale, OpenWebRX,
   readsb, gestionnaire SDR, SvxLink (`station_api.py`, port 5003)
 - **Récepteurs SDR** — quel récepteur est utilisé par quelle fonction

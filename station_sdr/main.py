@@ -6,9 +6,11 @@ récepteurs SDR, services) ouvrant chacune un module dédié, rafraîchis
 périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 """
 
+import io
 import threading
 import time
 import tkinter as tk
+from collections import deque
 from tkinter import messagebox, simpledialog, ttk
 
 import requests
@@ -423,10 +425,21 @@ class App(tk.Tk):
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
+        top_row = tk.Frame(wrapper, bg=theme.BG)
+        top_row.pack(fill="x", padx=12, pady=(8, 6))
         self.aircraft_count_label = tk.Label(
-            wrapper, text="Avions détectés : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
+            top_row, text="Avions détectés : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
         )
-        self.aircraft_count_label.pack(anchor="w", padx=12, pady=(8, 6))
+        self.aircraft_count_label.pack(side="left")
+
+        search_box = tk.Frame(top_row, bg=theme.BG)
+        search_box.pack(side="right")
+        tk.Label(
+            search_box, text="Rechercher (indicatif / hex) :", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+        ).pack(side="left", padx=(0, 6))
+        self.aircraft_search_var = tk.StringVar()
+        self.aircraft_search_var.trace_add("write", lambda *_a: self._repaint_aircraft())
+        ttk.Entry(search_box, textvariable=self.aircraft_search_var, width=16).pack(side="left")
 
         table_outer = theme.card(wrapper)
         table_outer.pack(fill="x", padx=12, pady=(0, 8))
@@ -440,12 +453,39 @@ class App(tk.Tk):
             self.aircraft_tree.heading(col, text=headings[col])
             self.aircraft_tree.column(col, width=130, anchor="center")
         self.aircraft_tree.pack(fill="both", expand=True, padx=1, pady=1)
+        self.aircraft_tree.bind("<<TreeviewSelect>>", self._on_aircraft_tree_select)
 
-        self.aircraft_detail_label = tk.Label(
-            wrapper, text="Cliquez un avion sur la carte pour voir son détail.",
-            bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=theme.FONT_BODY, anchor="w", padx=10, pady=6,
+        detail_outer = theme.card(wrapper)
+        detail_outer.pack(fill="x", padx=12, pady=(0, 8))
+        detail_inner = detail_outer.inner
+        detail_inner.configure(padding=12)
+
+        self.aircraft_photo_label = tk.Label(
+            detail_inner, bg=theme.BG_CARD_ALT, fg=theme.MUTED, text="—",
+            font=theme.FONT_SUBTITLE, width=20, height=6,
         )
-        self.aircraft_detail_label.pack(fill="x", padx=12, pady=(0, 8))
+        self.aircraft_photo_label.pack(side="left", padx=(0, 14))
+
+        text_frame = tk.Frame(detail_inner, bg=theme.BG_CARD)
+        text_frame.pack(side="left", fill="both", expand=True)
+        self.aircraft_detail_title = tk.Label(
+            text_frame, text="Cliquez un avion (carte ou tableau) pour voir son détail.",
+            bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD, anchor="w", justify="left",
+        )
+        self.aircraft_detail_title.pack(anchor="w")
+        self.aircraft_detail_telemetry = tk.Label(
+            text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, anchor="w",
+        )
+        self.aircraft_detail_telemetry.pack(anchor="w", pady=(2, 0))
+        self.aircraft_detail_enriched = tk.Label(
+            text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
+            anchor="w", justify="left", wraplength=560,
+        )
+        self.aircraft_detail_enriched.pack(anchor="w", pady=(6, 0))
+        self.aircraft_detail_credit = tk.Label(
+            text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8), anchor="w",
+        )
+        self.aircraft_detail_credit.pack(anchor="w", pady=(4, 0))
 
         map_outer = theme.card(wrapper)
         map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -454,54 +494,204 @@ class App(tk.Tk):
         lat, lon = DEFAULT_COORDS
         self.aircraft_map.set_position(lat, lon)
         self.aircraft_map.set_zoom(8)
-        self._aircraft_icon_refs = []
 
-    def _show_aircraft_detail(self, marker):
-        ac = marker.data
-        flight = (ac.get("flight") or "").strip() or ac.get("hex", "—")
-        self.aircraft_detail_label.config(
+        self._aircraft_icon_refs = []
+        self._aircraft_trails = {}
+        self._aircraft_info_cache = {}
+        self._selected_aircraft_hex = None
+        self._current_photo_image = None
+        self._last_aircraft_full = []
+        self._last_aircraft_by_hex = {}
+
+    # -- Sélection d'un avion (carte ou tableau) et infos enrichies --
+
+    def _on_aircraft_tree_select(self, _event):
+        selection = self.aircraft_tree.selection()
+        if not selection:
+            return
+        ac = self._last_aircraft_by_hex.get(selection[0])
+        if ac:
+            self._show_aircraft_detail_data(ac)
+
+    def _on_aircraft_marker_click(self, marker):
+        self._show_aircraft_detail_data(marker.data)
+
+    def _show_aircraft_detail_data(self, ac):
+        hx = ac.get("hex")
+        flight = (ac.get("flight") or "").strip() or hx or "—"
+        self._selected_aircraft_hex = hx
+
+        self.aircraft_detail_title.config(text=f"{flight}  ·  hex {hx or '—'}")
+        self.aircraft_detail_telemetry.config(
             text=(
-                f"{flight} — hex {ac.get('hex', '—')} · altitude {ac.get('alt_baro', '—')} ft · "
-                f"vitesse {ac.get('gs', '—')} kt · cap {ac.get('track', '—')}° · squawk {ac.get('squawk', '—')}"
+                f"Altitude {ac.get('alt_baro', '—')} ft · Vitesse {ac.get('gs', '—')} kt · "
+                f"Cap {ac.get('track', '—')}° · Squawk {ac.get('squawk', '—')}"
             ),
         )
+
+        cached = self._aircraft_info_cache.get(hx) if hx else None
+        if cached == "loading":
+            self.aircraft_detail_enriched.config(text="Recherche des informations avion...")
+        elif cached:
+            self._apply_enriched_info(hx, cached)
+        else:
+            self.aircraft_detail_enriched.config(text="Recherche des informations avion...")
+            self.aircraft_detail_credit.config(text="")
+            self._current_photo_image = None
+            self.aircraft_photo_label.config(image="", text="—")
+            if hx:
+                self._aircraft_info_cache[hx] = "loading"
+                threading.Thread(target=self._fetch_aircraft_info, args=(hx,), daemon=True).start()
+
+    def _fetch_aircraft_info(self, hx):
+        """Interroge hexdb.io (type/compagnie/immatriculation) et
+        planespotters.net (photo) — services publics tiers, gratuits et
+        sans clé, utilisés notamment par tar1090 pour ces mêmes données."""
+        info = {"type": None, "operator": None, "registration": None,
+                "photo_url": None, "photographer": None, "_photo_image": None}
+
+        try:
+            resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{hx}", timeout=6)
+            if resp.ok:
+                data = resp.json()
+                if isinstance(data, dict):
+                    info["type"] = data.get("ModelFullName") or data.get("Type") or data.get("ICAOTypeCode")
+                    info["operator"] = data.get("RegisteredOwners") or data.get("OperatorFlagCode")
+                    info["registration"] = data.get("Registration")
+        except (requests.RequestException, ValueError):
+            pass
+
+        photo_url = None
+        try:
+            resp = requests.get(f"https://api.planespotters.net/pub/photos/hex/{hx}", timeout=6)
+            if resp.ok:
+                payload = resp.json()
+                photos = payload.get("photos") or []
+                if photos:
+                    p = photos[0]
+                    thumb = p.get("thumbnail_large") or p.get("thumbnail") or {}
+                    photo_url = thumb.get("src")
+                    info["photographer"] = p.get("photographer")
+        except (requests.RequestException, ValueError):
+            pass
+
+        if photo_url:
+            try:
+                img_resp = requests.get(photo_url, timeout=8)
+                img_resp.raise_for_status()
+                img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
+                img.thumbnail((160, 110))
+                info["_photo_image"] = ImageTk.PhotoImage(img)
+            except Exception:
+                info["_photo_image"] = None
+
+        self._aircraft_info_cache[hx] = info
+        self.after(0, self._apply_enriched_info, hx, info)
+
+    def _apply_enriched_info(self, hx, info):
+        if hx != self._selected_aircraft_hex:
+            return  # une autre sélection a eu lieu entre-temps
+
+        parts = []
+        if info.get("operator"):
+            parts.append(info["operator"])
+        if info.get("type"):
+            parts.append(info["type"])
+        if info.get("registration"):
+            parts.append(f"immat. {info['registration']}")
+        self.aircraft_detail_enriched.config(
+            text=" · ".join(parts) if parts else "Informations avion indisponibles (hexdb.io).",
+        )
+
+        photo_image = info.get("_photo_image")
+        if photo_image is not None:
+            self._current_photo_image = photo_image
+            self.aircraft_photo_label.config(image=photo_image, text="")
+            credit = info.get("photographer")
+            self.aircraft_detail_credit.config(
+                text=f"Photo © {credit} — planespotters.net" if credit else "Photo : planespotters.net",
+            )
+        else:
+            self._current_photo_image = None
+            self.aircraft_photo_label.config(image="", text="Pas de photo")
+            self.aircraft_detail_credit.config(text="")
+
+    # -- Rendu --
 
     def _render_aircraft(self, data, error):
         if error:
             self.aircraft_count_label.config(text="Avions détectés : indisponible")
-            for item in self.aircraft_tree.get_children():
-                self.aircraft_tree.delete(item)
-            self.aircraft_map.delete_all_marker()
+            self._last_aircraft_full = []
+            self._last_aircraft_by_hex = {}
+            self._repaint_aircraft()
             if "aircraft" in self.tile_chips:
                 self.tile_chips["aircraft"].config(text="—")
             return
 
         aircraft = data.get("aircraft", [])
+        self._last_aircraft_full = aircraft
+        self._last_aircraft_by_hex = {ac["hex"]: ac for ac in aircraft if ac.get("hex")}
+
+        new_trails = {}
+        for ac in aircraft:
+            hx, lat, lon = ac.get("hex"), ac.get("lat"), ac.get("lon")
+            if hx and lat is not None and lon is not None:
+                trail = self._aircraft_trails.get(hx) or deque(maxlen=15)
+                trail.append((lat, lon))
+                new_trails[hx] = trail
+        self._aircraft_trails = new_trails
+
         self.aircraft_count_label.config(text=f"Avions détectés : {len(aircraft)}")
         if "aircraft" in self.tile_chips:
             self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)")
+
+        self._repaint_aircraft()
+
+    def _repaint_aircraft(self):
+        query = self.aircraft_search_var.get().strip().lower()
+        if query:
+            aircraft = [
+                ac for ac in self._last_aircraft_full
+                if query in (ac.get("flight") or "").strip().lower() or query in (ac.get("hex") or "").lower()
+            ]
+        else:
+            aircraft = self._last_aircraft_full
+
         for item in self.aircraft_tree.get_children():
             self.aircraft_tree.delete(item)
         self.aircraft_map.delete_all_marker()
+        self.aircraft_map.delete_all_path()
         self._aircraft_icon_refs = []
 
         for ac in aircraft:
             flight = (ac.get("flight") or "").strip() or "—"
-            self.aircraft_tree.insert(
-                "", "end",
-                values=(
-                    flight, ac.get("hex", "—"), ac.get("alt_baro", "—"),
-                    ac.get("gs", "—"), ac.get("track", "—"), ac.get("squawk", "—"),
-                ),
-            )
+            hx = ac.get("hex")
+            row_kwargs = {"iid": hx} if hx else {}
+            try:
+                self.aircraft_tree.insert(
+                    "", "end",
+                    values=(flight, hx or "—", ac.get("alt_baro", "—"),
+                            ac.get("gs", "—"), ac.get("track", "—"), ac.get("squawk", "—")),
+                    **row_kwargs,
+                )
+            except tk.TclError:
+                self.aircraft_tree.insert(
+                    "", "end",
+                    values=(flight, hx or "—", ac.get("alt_baro", "—"),
+                            ac.get("gs", "—"), ac.get("track", "—"), ac.get("squawk", "—")),
+                )
+
             lat, lon = ac.get("lat"), ac.get("lon")
             if lat is not None and lon is not None:
                 icon = _plane_icon(ac.get("alt_baro"), ac.get("track"))
                 self._aircraft_icon_refs.append(icon)
                 self.aircraft_map.set_marker(
                     lat, lon, text=flight, icon=icon, icon_anchor="center",
-                    data=ac, command=self._show_aircraft_detail,
+                    data=ac, command=self._on_aircraft_marker_click,
                 )
+                trail = self._aircraft_trails.get(hx)
+                if trail and len(trail) >= 2:
+                    self.aircraft_map.set_path(list(trail), color=_alt_color(ac.get("alt_baro")), width=2)
 
     # ----------------------------------------------------------- APRS --
 

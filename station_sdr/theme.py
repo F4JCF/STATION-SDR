@@ -68,6 +68,12 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
     style.map("Treeview", background=[("selected", ACCENT_DIM)])
 
     style.configure(
+        "TEntry",
+        fieldbackground=BG_CARD_ALT, foreground=TEXT, insertcolor=TEXT,
+        bordercolor=BORDER, borderwidth=1, padding=4,
+    )
+
+    style.configure(
         "Accent.TButton",
         background=ACCENT, foreground="#1a1200", font=FONT_BODY_BOLD,
         padding=(10, 5), borderwidth=0,
