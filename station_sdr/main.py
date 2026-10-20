@@ -804,8 +804,14 @@ class App(tk.Tk):
     # ------------------------------------------------------------- ADS-B --
 
     def _build_aircraft_table(self, frame):
-        wrapper = tk.Frame(frame, bg=theme.BG)
-        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+        outer_wrapper = tk.Frame(frame, bg=theme.BG)
+        outer_wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Même disposition que la page Météo : colonne de gauche (liste +
+        # fiche détaillée, largeur naturelle) et carte à droite occupant
+        # tout le reste en largeur ET en hauteur.
+        wrapper = tk.Frame(outer_wrapper, bg=theme.BG)
+        wrapper.pack(side="left", fill="y", pady=(0, 6))
 
         top_row = tk.Frame(wrapper, bg=theme.BG)
         top_row.pack(fill="x", padx=12, pady=(8, 6))
@@ -821,19 +827,19 @@ class App(tk.Tk):
         ).pack(side="left", padx=(0, 6))
         self.aircraft_search_var = tk.StringVar()
         self.aircraft_search_var.trace_add("write", lambda *_a: self._repaint_aircraft())
-        ttk.Entry(search_box, textvariable=self.aircraft_search_var, width=16).pack(side="left")
+        ttk.Entry(search_box, textvariable=self.aircraft_search_var, width=14).pack(side="left")
 
         table_outer = theme.card(wrapper)
-        table_outer.pack(fill="x", padx=12, pady=(0, 6))
+        table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         columns = ("flight", "hex", "alt", "gs", "track", "squawk")
-        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=3)
+        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=8)
         headings = {
             "flight": "Indicatif", "hex": "Hex", "alt": "Altitude (ft)",
             "gs": "Vitesse (kt)", "track": "Cap (°)", "squawk": "Squawk",
         }
         for col in columns:
             self.aircraft_tree.heading(col, text=headings[col])
-            self.aircraft_tree.column(col, width=130, anchor="center")
+            self.aircraft_tree.column(col, width=95, minwidth=60, anchor="center")
         self.aircraft_tree.pack(fill="both", expand=True, padx=1, pady=1)
         self.aircraft_tree.bind("<<TreeviewSelect>>", self._on_aircraft_tree_select)
 
@@ -882,7 +888,7 @@ class App(tk.Tk):
 
         self.aircraft_detail_enriched = tk.Label(
             text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
-            anchor="w", justify="left", wraplength=560,
+            anchor="w", justify="left", wraplength=400,
         )
         self.aircraft_detail_enriched.pack(anchor="w", pady=(6, 0))
         self.aircraft_detail_credit = tk.Label(
@@ -890,8 +896,8 @@ class App(tk.Tk):
         )
         self.aircraft_detail_credit.pack(anchor="w", pady=(4, 0))
 
-        map_outer = theme.card(wrapper)
-        map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        map_outer = theme.card(outer_wrapper)
+        map_outer.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
         self.aircraft_map = TkinterMapView(map_outer.inner, corner_radius=0)
         self.aircraft_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
@@ -1048,6 +1054,7 @@ class App(tk.Tk):
             self._repaint_aircraft()
             if "aircraft" in self.tile_chips:
                 self.tile_chips["aircraft"].config(text="—")
+            self.chip_aircraft.config(text="Avions : —")
             return
 
         aircraft = data.get("aircraft", [])
@@ -1066,6 +1073,7 @@ class App(tk.Tk):
         self.aircraft_count_label.config(text=f"Avions détectés : {len(aircraft)}")
         if "aircraft" in self.tile_chips:
             self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)")
+        self.chip_aircraft.config(text=f"Avions : {len(aircraft)}")
 
         self._repaint_aircraft()
 
