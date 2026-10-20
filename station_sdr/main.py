@@ -7,6 +7,8 @@ périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 """
 
 import io
+import os
+import sys
 import threading
 import time
 import tkinter as tk
@@ -23,6 +25,14 @@ from .version import __version__
 
 APP_TITLE = f"STATION-SDR v{__version__}"
 
+
+def _resource_path(relative_path: str) -> str:
+    """Chemin vers un fichier embarqué (ex. assets/logo.png), qu'on tourne
+    en développement ou dans l'exécutable PyInstaller onefile (qui extrait
+    ses données dans un dossier temporaire désigné par sys._MEIPASS)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative_path)
+
 # Coordonnées connues des stations météo (code OACI -> lat, lon), avec un
 # repli sur Mougins si le code renvoyé par l'API n'est pas reconnu.
 STATION_COORDS = {
@@ -30,6 +40,11 @@ STATION_COORDS = {
     "LFMN": (43.6584, 7.2159),  # Nice - Côte d'Azur
 }
 DEFAULT_COORDS = (43.6045, 6.9971)  # Mougins
+
+# API publique et gratuite RainViewer (radar pluie / satellite en direct,
+# sans clé requise) — https://www.rainviewer.com/api.html
+RAINVIEWER_INDEX_URL = "https://api.rainviewer.com/public/weather-maps.json"
+RAINVIEWER_TILE_HOST = "https://tilecache.rainviewer.com"
 
 # (clé, titre, sous-titre) des vignettes de l'écran d'accueil.
 HOME_TILES = [
@@ -53,6 +68,19 @@ def _fmt(value):
     return value if value not in (None, "") else "—"
 
 
+def _haversine_nm(lat1, lon1, lat2, lon2):
+    """Distance orthodromique en milles nautiques entre deux points."""
+    import math
+    try:
+        lat1, lon1, lat2, lon2 = map(math.radians, (lat1, lon1, lat2, lon2))
+    except (TypeError, ValueError):
+        return None
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * 6371.0088 * math.asin(math.sqrt(a)) / 1.852  # km -> nm
+
+
 def _alt_color(alt_ft):
     """Couleur par tranche d'altitude, dans l'esprit du dégradé de tar1090."""
     try:
@@ -68,6 +96,20 @@ def _alt_color(alt_ft):
     if alt < 35000:
         return "#4aa3ff"
     return "#b15bff"
+
+
+_SOURCE_LABELS = {
+    "adsb_icao": "ADS-B", "adsb_icao_nt": "ADS-B", "adsb_other": "ADS-B",
+    "adsr_icao": "ADS-R", "adsr_other": "ADS-R",
+    "tisb_icao": "TIS-B", "tisb_other": "TIS-B", "tisb_trackfile": "TIS-B",
+    "adsc": "ADS-C", "mlat": "MLAT", "mode_s": "Mode S", "other": "Autre",
+}
+
+
+def _source_label(type_code):
+    if not type_code:
+        return "—"
+    return _SOURCE_LABELS.get(type_code, type_code)
 
 
 _PLANE_ICON_CACHE = {}
@@ -106,6 +148,10 @@ class App(tk.Tk):
         self.title(APP_TITLE)
         self.geometry("1040x680")
         self.minsize(860, 560)
+        try:
+            self.iconbitmap(default=_resource_path("assets/icon.ico"))
+        except Exception:
+            pass  # icône absente (dev) ou plateforme ne supportant pas .ico
 
         self.config_data = load_config()
         self._stop_event = threading.Event()
@@ -138,6 +184,14 @@ class App(tk.Tk):
     def _build_header(self):
         header = tk.Frame(self, bg=theme.BG)
         header.pack(fill="x", padx=20, pady=(16, 8))
+
+        self._header_logo_image = None
+        try:
+            logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
+            self._header_logo_image = ImageTk.PhotoImage(logo_img)
+            tk.Label(header, image=self._header_logo_image, bg=theme.BG).pack(side="left", padx=(0, 14))
+        except Exception:
+            pass  # logo absent/illisible : l'en-tête reste utilisable sans lui
 
         left = tk.Frame(header, bg=theme.BG)
         left.pack(side="left", fill="y")
@@ -294,6 +348,7 @@ class App(tk.Tk):
         self._fetch(lambda: api_client.get_services_status(host, cfg["port_services"]), self._render_services)
         self._fetch(lambda: api_client.get_sdr_status(host, cfg["port_sdr"]), self._render_sdr)
         self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
+        self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
 
@@ -358,6 +413,24 @@ class App(tk.Tk):
         )
         self.weather_metar_label.grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 0))
 
+        overlay_row = tk.Frame(wrapper, bg=theme.BG)
+        overlay_row.pack(fill="x", padx=12, pady=(0, 6))
+        tk.Label(
+            overlay_row, text="Carte en direct :", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+        ).pack(side="left", padx=(0, 8))
+        self._weather_overlay_buttons = {}
+        for key, label in (("none", "Aucune"), ("radar", "Radar pluie"), ("satellite", "Satellite")):
+            btn = ttk.Button(
+                overlay_row, text=label, style="Flat.TButton",
+                command=lambda k=key: self._set_weather_overlay(k),
+            )
+            btn.pack(side="left", padx=4)
+            self._weather_overlay_buttons[key] = btn
+        self.weather_overlay_label = tk.Label(
+            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8),
+        )
+        self.weather_overlay_label.pack(side="left", padx=12)
+
         map_outer = theme.card(wrapper)
         map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.weather_map = TkinterMapView(map_outer.inner, corner_radius=0)
@@ -367,6 +440,85 @@ class App(tk.Tk):
         self.weather_map.set_zoom(11)
         self.weather_map.set_marker(lat, lon, text="Station")
         self._weather_map_station = None
+        self._weather_overlay_mode = "none"
+        self._weather_overlay_last_fetch = 0.0
+        self._highlight_weather_overlay_buttons()
+
+    # -- Carte météo en direct (radar pluie / satellite — RainViewer) --
+
+    def _highlight_weather_overlay_buttons(self):
+        for key, btn in self._weather_overlay_buttons.items():
+            btn.configure(style="Accent.TButton" if key == self._weather_overlay_mode else "Flat.TButton")
+
+    def _set_weather_overlay(self, mode: str):
+        self._weather_overlay_mode = mode
+        self._highlight_weather_overlay_buttons()
+        if mode == "none":
+            self.weather_map.set_overlay_tile_server(None)
+            self._redraw_weather_map_tiles()
+            self.weather_overlay_label.config(text="")
+            return
+        self.weather_overlay_label.config(text="Chargement...")
+        threading.Thread(target=self._fetch_weather_overlay, args=(mode,), daemon=True).start()
+
+    def _fetch_weather_overlay(self, mode: str):
+        """Interroge l'API publique et gratuite RainViewer (radar de pluie
+        et imagerie satellite en direct, sans clé requise) et construit
+        l'URL de tuiles correspondant à l'image la plus récente."""
+        try:
+            resp = requests.get(RAINVIEWER_INDEX_URL, timeout=8)
+            resp.raise_for_status()
+            index = resp.json()
+            host = index.get("host", RAINVIEWER_TILE_HOST)
+            if mode == "radar":
+                frames = (index.get("radar") or {}).get("past") or []
+                if not frames:
+                    raise ValueError("Aucune image radar disponible pour l'instant.")
+                path = frames[-1]["path"]
+                url = f"{host}{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+                label_text = "Radar pluie en direct — RainViewer.com"
+            else:
+                frames = (index.get("satellite") or {}).get("infrared") or []
+                if not frames:
+                    raise ValueError("Aucune image satellite disponible pour l'instant.")
+                path = frames[-1]["path"]
+                url = f"{host}{path}/256/{{z}}/{{x}}/{{y}}/0/0_0.png"
+                label_text = "Satellite infrarouge en direct — RainViewer.com"
+        except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
+            self.after(0, self._weather_overlay_failed, mode, str(exc))
+            return
+        self.after(0, self._apply_weather_overlay, mode, url, label_text)
+
+    def _apply_weather_overlay(self, mode: str, url: str, label_text: str):
+        if mode != self._weather_overlay_mode:
+            return  # l'utilisateur a changé d'avis entre-temps
+        self.weather_map.set_overlay_tile_server(url)
+        self._redraw_weather_map_tiles()
+        self.weather_overlay_label.config(text=label_text)
+        self._weather_overlay_last_fetch = time.time()
+
+    def _weather_overlay_failed(self, mode: str, message: str):
+        if mode != self._weather_overlay_mode:
+            return
+        self.weather_overlay_label.config(text=f"Indisponible : {message}")
+
+    def _redraw_weather_map_tiles(self):
+        """tkintermapview met en cache les tuiles déjà chargées sans tenir
+        compte d'un changement de calque superposé : on force le
+        rechargement pour que le radar/satellite apparaisse immédiatement."""
+        self.weather_map.tile_image_cache = {}
+        self.weather_map.draw_initial_array()
+
+    def _maybe_refresh_weather_overlay(self):
+        """Rafraîchit le calque actif toutes les ~5 minutes (le radar
+        RainViewer est lui-même mis à jour à peu près à cette fréquence)."""
+        if self._weather_overlay_mode == "none":
+            return
+        if time.time() - self._weather_overlay_last_fetch < 300:
+            return
+        threading.Thread(
+            target=self._fetch_weather_overlay, args=(self._weather_overlay_mode,), daemon=True,
+        ).start()
 
     def _render_weather(self, data, error):
         if error:
@@ -473,10 +625,31 @@ class App(tk.Tk):
             bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD, anchor="w", justify="left",
         )
         self.aircraft_detail_title.pack(anchor="w")
-        self.aircraft_detail_telemetry = tk.Label(
-            text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, anchor="w",
-        )
-        self.aircraft_detail_telemetry.pack(anchor="w", pady=(2, 0))
+
+        # Grille de champs façon tar1090 (spatial / signal), remplie au
+        # clic sur un avion (carte ou tableau).
+        fields_frame = tk.Frame(text_frame, bg=theme.BG_CARD)
+        fields_frame.pack(anchor="w", fill="x", pady=(6, 0))
+        detail_field_titles = [
+            ("gs", "Vitesse sol"), ("position", "Position"),
+            ("alt_baro", "Altitude baro."), ("distance", "Distance station"),
+            ("alt_geom", "Altitude géo."), ("source", "Source"),
+            ("vrate", "Vitesse verticale"), ("rssi", "Signal (RSSI)"),
+            ("track", "Cap"), ("messages", "Messages"),
+            ("squawk", "Squawk"), ("seen", "Vu / position il y a"),
+        ]
+        self.aircraft_detail_value_labels = {}
+        for i, (key, title) in enumerate(detail_field_titles):
+            r, c = divmod(i, 2)
+            cell = tk.Frame(fields_frame, bg=theme.BG_CARD)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, 28), pady=2)
+            tk.Label(
+                cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+            ).pack(anchor="w")
+            value_label = tk.Label(cell, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY)
+            value_label.pack(anchor="w")
+            self.aircraft_detail_value_labels[key] = value_label
+
         self.aircraft_detail_enriched = tk.Label(
             text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
             anchor="w", justify="left", wraplength=560,
@@ -521,13 +694,32 @@ class App(tk.Tk):
         flight = (ac.get("flight") or "").strip() or hx or "—"
         self._selected_aircraft_hex = hx
 
-        self.aircraft_detail_title.config(text=f"{flight}  ·  hex {hx or '—'}")
-        self.aircraft_detail_telemetry.config(
-            text=(
-                f"Altitude {ac.get('alt_baro', '—')} ft · Vitesse {ac.get('gs', '—')} kt · "
-                f"Cap {ac.get('track', '—')}° · Squawk {ac.get('squawk', '—')}"
-            ),
-        )
+        self.aircraft_detail_title.config(text=f"{flight}  ·  hex {(hx or '—').upper()}")
+
+        gs = ac.get("gs")
+        lat, lon = ac.get("lat"), ac.get("lon")
+        station_lat, station_lon = DEFAULT_COORDS
+        distance_nm = _haversine_nm(station_lat, station_lon, lat, lon) if lat is not None and lon is not None else None
+        vert_rate = ac.get("baro_rate")
+        if vert_rate is None:
+            vert_rate = ac.get("geom_rate")
+
+        values = {
+            "gs": f"{_fmt(gs)} kt ({_fmt(_kt_to_kmh(gs))} km/h)",
+            "position": f"{lat:.3f}°, {lon:.3f}°" if lat is not None and lon is not None else "—",
+            "alt_baro": f"{_fmt(ac.get('alt_baro'))} ft",
+            "distance": f"{distance_nm:.1f} nm" if distance_nm is not None else "—",
+            "alt_geom": f"{_fmt(ac.get('alt_geom'))} ft",
+            "source": _source_label(ac.get("type")),
+            "vrate": f"{_fmt(vert_rate)} ft/min",
+            "rssi": f"{_fmt(ac.get('rssi'))} dBFS",
+            "track": f"{_fmt(ac.get('track'))}°",
+            "messages": _fmt(ac.get("messages")),
+            "squawk": _fmt(ac.get("squawk")),
+            "seen": f"{_fmt(ac.get('seen'))} s / {_fmt(ac.get('seen_pos'))} s",
+        }
+        for key, label in self.aircraft_detail_value_labels.items():
+            label.config(text=values.get(key, "—"))
 
         cached = self._aircraft_info_cache.get(hx) if hx else None
         if cached == "loading":
