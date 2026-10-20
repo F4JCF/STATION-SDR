@@ -19,6 +19,15 @@ import requests
 from PIL import Image, ImageDraw, ImageTk
 from tkintermapview import TkinterMapView
 
+# tkintermapview (superposition de calque radar/satellite) utilise encore
+# l'alias historique Image.ANTIALIAS, supprimé par Pillow 10+. Sans ce
+# correctif, chaque tuile avec calque levait une AttributeError que la
+# bibliothèque rattrape en silence en renvoyant une tuile VIDE — y compris
+# le fond de carte, pas seulement le calque — d'où une carte entièrement
+# blanche dès qu'un calque (radar/satellite) était activé.
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
+
 from . import api_client, theme, updater
 from .config import load_config, save_config
 from .version import __version__
@@ -45,6 +54,8 @@ DEFAULT_COORDS = (43.6045, 6.9971)  # Mougins
 # sans clé requise) — https://www.rainviewer.com/api.html
 RAINVIEWER_INDEX_URL = "https://api.rainviewer.com/public/weather-maps.json"
 RAINVIEWER_TILE_HOST = "https://tilecache.rainviewer.com"
+RAINVIEWER_MAX_ZOOM = 7  # zoom maximal documenté par RainViewer pour ses tuiles radar
+WEATHER_MAP_DEFAULT_ZOOM = 11
 
 # (clé, titre, sous-titre) des vignettes de l'écran d'accueil.
 HOME_TILES = [
@@ -419,7 +430,7 @@ class App(tk.Tk):
             overlay_row, text="Carte en direct :", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
         ).pack(side="left", padx=(0, 8))
         self._weather_overlay_buttons = {}
-        for key, label in (("none", "Aucune"), ("radar", "Radar pluie"), ("satellite", "Satellite")):
+        for key, label in (("none", "Aucune"), ("radar", "Radar pluie")):
             btn = ttk.Button(
                 overlay_row, text=label, style="Flat.TButton",
                 command=lambda k=key: self._set_weather_overlay(k),
@@ -437,7 +448,7 @@ class App(tk.Tk):
         self.weather_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.weather_map.set_position(lat, lon)
-        self.weather_map.set_zoom(11)
+        self.weather_map.set_zoom(WEATHER_MAP_DEFAULT_ZOOM)
         self.weather_map.set_marker(lat, lon, text="Station")
         self._weather_map_station = None
         self._weather_overlay_mode = "none"
@@ -455,35 +466,33 @@ class App(tk.Tk):
         self._highlight_weather_overlay_buttons()
         if mode == "none":
             self.weather_map.set_overlay_tile_server(None)
+            self.weather_map.set_zoom(WEATHER_MAP_DEFAULT_ZOOM)
             self._redraw_weather_map_tiles()
             self.weather_overlay_label.config(text="")
             return
+        # RainViewer ne documente ses tuiles radar que jusqu'au zoom 7 ; on
+        # réduit temporairement le zoom de la carte pour rester dans la
+        # couverture garantie (sinon certaines tuiles radar échouent, ce qui
+        # fait disparaître aussi le fond de carte sur ces tuiles-là).
+        self.weather_map.set_zoom(RAINVIEWER_MAX_ZOOM)
         self.weather_overlay_label.config(text="Chargement...")
         threading.Thread(target=self._fetch_weather_overlay, args=(mode,), daemon=True).start()
 
     def _fetch_weather_overlay(self, mode: str):
         """Interroge l'API publique et gratuite RainViewer (radar de pluie
-        et imagerie satellite en direct, sans clé requise) et construit
-        l'URL de tuiles correspondant à l'image la plus récente."""
+        en direct, sans clé requise) et construit l'URL de tuiles
+        correspondant à l'image la plus récente."""
         try:
             resp = requests.get(RAINVIEWER_INDEX_URL, timeout=8)
             resp.raise_for_status()
             index = resp.json()
             host = index.get("host", RAINVIEWER_TILE_HOST)
-            if mode == "radar":
-                frames = (index.get("radar") or {}).get("past") or []
-                if not frames:
-                    raise ValueError("Aucune image radar disponible pour l'instant.")
-                path = frames[-1]["path"]
-                url = f"{host}{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
-                label_text = "Radar pluie en direct — RainViewer.com"
-            else:
-                frames = (index.get("satellite") or {}).get("infrared") or []
-                if not frames:
-                    raise ValueError("Aucune image satellite disponible pour l'instant.")
-                path = frames[-1]["path"]
-                url = f"{host}{path}/256/{{z}}/{{x}}/{{y}}/0/0_0.png"
-                label_text = "Satellite infrarouge en direct — RainViewer.com"
+            frames = (index.get("radar") or {}).get("past") or []
+            if not frames:
+                raise ValueError("Aucune image radar disponible pour l'instant.")
+            path = frames[-1]["path"]
+            url = f"{host}{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+            label_text = "Radar pluie en direct — RainViewer.com"
         except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
             self.after(0, self._weather_overlay_failed, mode, str(exc))
             return
@@ -594,9 +603,9 @@ class App(tk.Tk):
         ttk.Entry(search_box, textvariable=self.aircraft_search_var, width=16).pack(side="left")
 
         table_outer = theme.card(wrapper)
-        table_outer.pack(fill="x", padx=12, pady=(0, 8))
+        table_outer.pack(fill="x", padx=12, pady=(0, 6))
         columns = ("flight", "hex", "alt", "gs", "track", "squawk")
-        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=4)
+        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=3)
         headings = {
             "flight": "Indicatif", "hex": "Hex", "alt": "Altitude (ft)",
             "gs": "Vitesse (kt)", "track": "Cap (°)", "squawk": "Squawk",
@@ -608,9 +617,9 @@ class App(tk.Tk):
         self.aircraft_tree.bind("<<TreeviewSelect>>", self._on_aircraft_tree_select)
 
         detail_outer = theme.card(wrapper)
-        detail_outer.pack(fill="x", padx=12, pady=(0, 8))
+        detail_outer.pack(fill="x", padx=12, pady=(0, 6))
         detail_inner = detail_outer.inner
-        detail_inner.configure(padding=12)
+        detail_inner.configure(padding=8)
 
         self.aircraft_photo_label = tk.Label(
             detail_inner, bg=theme.BG_CARD_ALT, fg=theme.MUTED, text="—",
@@ -640,9 +649,9 @@ class App(tk.Tk):
         ]
         self.aircraft_detail_value_labels = {}
         for i, (key, title) in enumerate(detail_field_titles):
-            r, c = divmod(i, 2)
+            r, c = divmod(i, 4)
             cell = tk.Frame(fields_frame, bg=theme.BG_CARD)
-            cell.grid(row=r, column=c, sticky="w", padx=(0, 28), pady=2)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, 16), pady=1)
             tk.Label(
                 cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
             ).pack(anchor="w")

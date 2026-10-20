@@ -6,9 +6,11 @@ Tableau de bord Windows pour le Raspberry Pi multi-fonctions **F4JCF-SDR-STATION
 ## Fonctionnalités
 
 - **Météo** — relevé local (`meteo_local.py`, port 5001), carte avec calque
-  en direct au choix (radar pluie ou satellite infrarouge, via l'API
-  publique et gratuite [RainViewer](https://www.rainviewer.com/), sans clé
-  requise — nécessite une connexion Internet sur le PC)
+  radar pluie en direct au choix, via l'API publique et gratuite
+  [RainViewer](https://www.rainviewer.com/), sans clé requise — nécessite
+  une connexion Internet sur le PC ; le zoom de la carte est
+  automatiquement réduit pendant l'affichage du radar (RainViewer ne
+  documente ses tuiles que jusqu'au zoom 7)
 - **Trafic aérien (ADS-B)** — liste des avions détectés (`readsb`/`tar1090`, port 8504),
   carte interactive avec icônes orientées/colorées par altitude, traînées de
   vol, recherche par indicatif/hex, et fiche détaillée au clic façon
