@@ -35,7 +35,7 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --onefile --windowed --name STATION-SDR run.py
+          pyinstaller --onefile --windowed --name STATION-SDR --collect-all tkintermapview --collect-all PIL run.py
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -11,12 +11,32 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 import requests
+from tkintermapview import TkinterMapView
 
 from . import api_client, theme, updater
 from .config import load_config, save_config
 from .version import __version__
 
 APP_TITLE = f"STATION-SDR v{__version__}"
+
+# Coordonnées connues des stations météo (code OACI -> lat, lon), avec un
+# repli sur Mougins si le code renvoyé par l'API n'est pas reconnu.
+STATION_COORDS = {
+    "LFMD": (43.5417, 6.9533),  # Cannes - Mandelieu
+    "LFMN": (43.6584, 7.2159),  # Nice - Côte d'Azur
+}
+DEFAULT_COORDS = (43.6045, 6.9971)  # Mougins
+
+
+def _kt_to_kmh(value):
+    try:
+        return round(float(value) * 1.852, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt(value):
+    return value if value not in (None, "") else "—"
 
 
 class App(tk.Tk):
@@ -97,6 +117,7 @@ class App(tk.Tk):
         self.tab_services = self._add_tab(notebook, "Services")
         self.tab_sdr = self._add_tab(notebook, "Récepteurs SDR")
 
+        self._build_weather_tab(self.tab_weather)
         self._build_aircraft_table(self.tab_aircraft)
 
     def _add_tab(self, notebook, label):
@@ -158,14 +179,7 @@ class App(tk.Tk):
 
     # --------------------------------------------------------------- Météo --
 
-    def _render_weather(self, data, error):
-        frame = self.tab_weather
-        if error:
-            self._render_error(frame, error)
-            return
-        self._last_weather = data
-        self._clear(frame)
-
+    def _build_weather_tab(self, frame):
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
@@ -174,42 +188,94 @@ class App(tk.Tk):
         inner = outer.inner
         inner.configure(padding=16)
 
-        station = data.get("station") or data.get("nom") or "—"
-        tk.Label(
-            inner, text=f"Station : {station}", bg=theme.BG_CARD, fg=theme.TEXT,
-            font=theme.FONT_SECTION,
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        self.weather_station_label = tk.Label(
+            inner, text="Station : —", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+        )
+        self.weather_station_label.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
-        rows = [
-            ("Température", f"{data.get('temperature_c', '—')} °C"),
-            ("Vent", f"{data.get('vent_direction_deg', '—')}° — {data.get('vent_vitesse_kt', '—')} kt"),
-            ("Rafales", f"{data.get('vent_rafales_kt') or '—'} kt"),
-            ("Visibilité", f"{data.get('visibilite_sm', '—')} sm"),
-            ("Pression QNH", f"{data.get('pression_qnh_hpa', '—')} hPa"),
-            ("Point de rosée", f"{data.get('point_rosee_c', '—')} °C"),
-            ("Observation", data.get("heure_obs", "—")),
-            ("Source", data.get("source", "—")),
+        row_titles = [
+            ("temperature", "Température"), ("vent", "Vent"),
+            ("rafales", "Rafales"), ("visibilite", "Visibilité"),
+            ("pression", "Pression QNH"), ("point_rosee", "Point de rosée"),
+            ("observation", "Observation"), ("source", "Source"),
         ]
-        for i, (label, value) in enumerate(rows):
+        self.weather_value_labels = {}
+        for i, (key, title) in enumerate(row_titles):
             r, c = divmod(i, 2)
             cell = tk.Frame(inner, bg=theme.BG_CARD)
             cell.grid(row=r + 1, column=c, sticky="w", padx=(0, 40), pady=4)
-            tk.Label(cell, text=label, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(anchor="w")
-            tk.Label(cell, text=value, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD).pack(anchor="w")
+            tk.Label(cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(anchor="w")
+            value_label = tk.Label(cell, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD)
+            value_label.pack(anchor="w")
+            self.weather_value_labels[key] = value_label
+
+        self.weather_clouds_label = tk.Label(
+            inner, text="", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY, justify="left",
+        )
+        self.weather_clouds_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        self.weather_metar_label = tk.Label(
+            inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_MONO,
+            wraplength=820, justify="left",
+        )
+        self.weather_metar_label.grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 0))
+
+        map_outer = theme.card(wrapper)
+        map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.weather_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.weather_map.pack(fill="both", expand=True, padx=1, pady=1)
+        lat, lon = DEFAULT_COORDS
+        self.weather_map.set_position(lat, lon)
+        self.weather_map.set_zoom(11)
+        self.weather_map.set_marker(lat, lon, text="Station")
+        self._weather_map_station = None
+
+    def _render_weather(self, data, error):
+        if error:
+            self.weather_station_label.config(text="Station : indisponible")
+            for lbl in self.weather_value_labels.values():
+                lbl.config(text="—")
+            self.weather_clouds_label.config(text="")
+            self.weather_metar_label.config(text=f"Indisponible — {error}", fg=theme.RED)
+            return
+
+        self._last_weather = data
+        self.weather_metar_label.config(fg=theme.MUTED)
+
+        station = data.get("station") or data.get("nom") or "—"
+        self.weather_station_label.config(text=f"Station : {station}")
+
+        vent_kt = data.get("vent_vitesse_kt")
+        rafales_kt = data.get("vent_rafales_kt")
+        values = {
+            "temperature": f"{data.get('temperature_c', '—')} °C",
+            "vent": f"{data.get('vent_direction_deg', '—')}° — "
+                    f"{_fmt(vent_kt)} kt ({_fmt(_kt_to_kmh(vent_kt))} km/h)",
+            "rafales": f"{_fmt(rafales_kt)} kt ({_fmt(_kt_to_kmh(rafales_kt))} km/h)",
+            "visibilite": f"{data.get('visibilite_sm', '—')} sm",
+            "pression": f"{data.get('pression_qnh_hpa', '—')} hPa",
+            "point_rosee": f"{data.get('point_rosee_c', '—')} °C",
+            "observation": data.get("heure_obs", "—"),
+            "source": data.get("source", "—"),
+        }
+        for key, value in values.items():
+            self.weather_value_labels[key].config(text=value)
 
         nuages = data.get("nuages") or []
         if nuages:
             txt = " · ".join(f"{n.get('cover', '?')} {n.get('base', '?')} ft" for n in nuages)
-            tk.Label(
-                inner, text=f"Nuages : {txt}", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY,
-            ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            self.weather_clouds_label.config(text=f"Nuages : {txt}")
+        else:
+            self.weather_clouds_label.config(text="")
 
-        metar = data.get("metar_brut")
-        if metar:
-            tk.Label(
-                inner, text=metar, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_MONO,
-                wraplength=820, justify="left",
-            ).grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 0))
+        self.weather_metar_label.config(text=data.get("metar_brut", ""))
+
+        if station != self._weather_map_station:
+            lat, lon = STATION_COORDS.get(station, DEFAULT_COORDS)
+            self.weather_map.set_position(lat, lon)
+            self.weather_map.delete_all_marker()
+            self.weather_map.set_marker(lat, lon, text=station)
+            self._weather_map_station = station
 
     # ------------------------------------------------------------- ADS-B --
 
@@ -222,10 +288,10 @@ class App(tk.Tk):
         )
         self.aircraft_count_label.pack(anchor="w", padx=12, pady=(8, 6))
 
-        outer = theme.card(wrapper)
-        outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        table_outer = theme.card(wrapper)
+        table_outer.pack(fill="both", padx=12, pady=(0, 8))
         columns = ("flight", "hex", "alt", "gs", "track", "squawk")
-        self.aircraft_tree = ttk.Treeview(outer.inner, columns=columns, show="headings")
+        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=7)
         headings = {
             "flight": "Indicatif", "hex": "Hex", "alt": "Altitude (ft)",
             "gs": "Vitesse (kt)", "track": "Cap (°)", "squawk": "Squawk",
@@ -235,17 +301,27 @@ class App(tk.Tk):
             self.aircraft_tree.column(col, width=130, anchor="center")
         self.aircraft_tree.pack(fill="both", expand=True, padx=1, pady=1)
 
+        map_outer = theme.card(wrapper)
+        map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.aircraft_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.aircraft_map.pack(fill="both", expand=True, padx=1, pady=1)
+        lat, lon = DEFAULT_COORDS
+        self.aircraft_map.set_position(lat, lon)
+        self.aircraft_map.set_zoom(8)
+
     def _render_aircraft(self, data, error):
         if error:
             self.aircraft_count_label.config(text="Avions détectés : indisponible")
             for item in self.aircraft_tree.get_children():
                 self.aircraft_tree.delete(item)
+            self.aircraft_map.delete_all_marker()
             return
 
         aircraft = data.get("aircraft", [])
         self.aircraft_count_label.config(text=f"Avions détectés : {len(aircraft)}")
         for item in self.aircraft_tree.get_children():
             self.aircraft_tree.delete(item)
+        self.aircraft_map.delete_all_marker()
         for ac in aircraft:
             flight = (ac.get("flight") or "").strip() or "—"
             self.aircraft_tree.insert(
@@ -255,6 +331,10 @@ class App(tk.Tk):
                     ac.get("gs", "—"), ac.get("track", "—"), ac.get("squawk", "—"),
                 ),
             )
+            lat, lon = ac.get("lat"), ac.get("lon")
+            if lat is not None and lon is not None:
+                alt = ac.get("alt_baro", "—")
+                self.aircraft_map.set_marker(lat, lon, text=f"{flight} · {alt} ft")
 
     # ---------------------------------------------------------- Services --
 
