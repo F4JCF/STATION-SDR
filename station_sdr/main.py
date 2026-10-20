@@ -94,6 +94,7 @@ HOME_TILES = [
     ("openwebrx", "OpenWebRX", "Réception SDR (ouvre le navigateur)"),
     ("services", "Services système", "Vue d'ensemble des services"),
     ("health", "Santé du Pi", "Alimentation, température, ressources"),
+    ("alerts", "Alertes", "Urgences avion, balises, messages"),
 ]
 
 # Module -> mode de la clé SDR unique (sdr_switch.py sur le Pi). Ouvrir
@@ -289,6 +290,10 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
             [pt(0.14, 0.45), pt(0.28, 0.28), pt(0.40, 0.54), pt(0.54, 0.24), pt(0.68, 0.50), pt(0.86, 0.38)],
             fill=color, width=max(1, lw - 1),
         )
+    elif key == "alerts":
+        d.polygon([pt(0.5, 0.06), pt(0.95, 0.90), pt(0.05, 0.90)], outline=color, width=lw)
+        d.line([pt(0.5, 0.34), pt(0.5, 0.64)], fill=color, width=lw + 1)
+        d.ellipse([*pt(0.46, 0.72), *pt(0.54, 0.80)], fill=color)
     elif key == "health":
         # Cœur + tracé d'électrocardiogramme
         d.polygon(
@@ -332,6 +337,56 @@ def _find_service(data: dict, *name_fragments: str):
     return None
 
 
+class _Gauge(tk.Canvas):
+    """Vu-mètre à aiguille (demi-cercle) avec zones vert / orange / rouge."""
+
+    def __init__(self, parent, title, unit, vmin, vmax, warn, crit, width=210, height=150, bg=None):
+        super().__init__(parent, width=width, height=height, bg=bg or theme.BG_CARD, highlightthickness=0)
+        self.title, self.unit, self.vmin, self.vmax = title, unit, vmin, vmax
+        self.warn, self.crit = warn, crit
+        self.w, self.h = width, height
+        self.value = None
+        self.subtitle = ""
+        self._draw()
+
+    def _angle(self, v):
+        v = max(self.vmin, min(self.vmax, v))
+        return 180 - (v - self.vmin) / (self.vmax - self.vmin) * 180
+
+    def set(self, value, subtitle=""):
+        self.value, self.subtitle = value, subtitle
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        cx, cy = self.w / 2, self.h - 40
+        r = min(self.w / 2 - 14, self.h - 66)
+        box = (cx - r, cy - r, cx + r, cy + r)
+        self.create_text(cx, 10, text=self.title, fill=theme.MUTED, font=("Segoe UI", 9, "bold"))
+        zones = ((self.vmin, self.warn, theme.GREEN), (self.warn, self.crit, theme.ORANGE), (self.crit, self.vmax, theme.RED))
+        for lo, hi, col in zones:
+            a0, a1 = self._angle(lo), self._angle(hi)
+            self.create_arc(*box, start=a1, extent=a0 - a1, style="arc", outline=col, width=10)
+        for i in range(11):  # graduations
+            v = self.vmin + (self.vmax - self.vmin) * i / 10
+            ang = math.radians(self._angle(v))
+            r1, r2 = r - 9, r - (17 if i % 5 == 0 else 13)
+            self.create_line(cx + r1 * math.cos(ang), cy - r1 * math.sin(ang),
+                             cx + r2 * math.cos(ang), cy - r2 * math.sin(ang), fill=theme.MUTED)
+        if self.value is None:
+            txt, col = "—", theme.MUTED
+        else:
+            ang = math.radians(self._angle(self.value))
+            self.create_line(cx, cy, cx + (r - 14) * math.cos(ang), cy - (r - 14) * math.sin(ang),
+                             fill=theme.TEXT, width=3, capstyle="round")
+            col = theme.RED if self.value >= self.crit else theme.ORANGE if self.value >= self.warn else theme.GREEN
+            txt = f"{self.value:.0f} {self.unit}"
+        self.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=theme.TEXT, outline="")
+        self.create_text(cx, cy + 15, text=txt, fill=col, font=("Segoe UI", 13, "bold"))
+        if self.subtitle:
+            self.create_text(cx, cy + 31, text=self.subtitle, fill=theme.MUTED, font=("Segoe UI", 8))
+
+
 class _TileChip:
     """Pastille d'une vignette d'accueil. Les modules qui partagent la clé
     SDR affichent « En pause » quand la clé est ailleurs, et la vignette du
@@ -361,6 +416,9 @@ class _TileChip:
                 bg=theme.BG_CARD_ALT,
             )
             self.frame.config(bg=theme.BORDER)
+        elif self.key == "alerts" and str(self.text).startswith("⚠"):
+            self.label.config(text=f" {self.text} ", fg="#0b0f17", bg=theme.RED)
+            self.frame.config(bg=theme.RED)
         elif mode and current == mode:
             self.label.config(text=f" ● {self.text} ", fg="#1a1200", bg=theme.ACCENT)
             self.frame.config(bg=theme.ACCENT)
@@ -439,7 +497,22 @@ class App(tk.Tk):
 
         self._header_logo_image = None
         try:
-            logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
+            try:
+                # L'icône de l'exe contient le même logo en 256 px : on la
+                # réduit (net) plutôt que d'agrandir le PNG de 96 px (flou).
+                ico = Image.open(_resource_path("assets/icon.ico"))
+                ico.size = (256, 256)
+                logo_img = ico.convert("RGBA")
+            except Exception:
+                logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
+            logo_img = logo_img.resize((140, 140), Image.LANCZOS)
+            # Le logo est rond : on masque les coins (blancs) pour qu'il se
+            # détache proprement sur le fond sombre.
+            mask = Image.new("L", (560, 560), 0)
+            ImageDraw.Draw(mask).ellipse([4, 4, 555, 555], fill=255)
+            mask = mask.resize((140, 140), Image.LANCZOS)
+            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (140, 140), 0), mask)
+            logo_img.putalpha(alpha)
             self._header_logo_image = ImageTk.PhotoImage(logo_img)
             tk.Label(header, image=self._header_logo_image, bg=theme.BG).pack(side="left", padx=(0, 14))
         except Exception:
@@ -522,15 +595,102 @@ class App(tk.Tk):
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
         self._build_health_tab(self.pages["health"])
+        self._build_alerts_tab(self.pages["alerts"])
+        self._update_alert_chip()
 
         self.show_home()
 
+    def _build_home_gauges(self):
+        """Bandeau de vu-mètres de santé du Pi en haut de l'accueil."""
+        outer = theme.card(self.home_frame)
+        outer.pack(fill="x", padx=14, pady=(4, 6))
+        row = outer.inner
+        row.configure(padding=(10, 8))
+        self.home_gauges = {}
+        specs = (
+            ("temp", "TEMPÉRATURE CPU", "°C", 30, 90, 70, 80),
+            ("cpu", "CHARGE CPU", "%", 0, 100, 70, 90),
+            ("mem", "MÉMOIRE", "%", 0, 100, 85, 95),
+            ("disk", "DISQUE", "%", 0, 100, 85, 95),
+        )
+        for i, (key, title, unit, lo, hi, warn, crit) in enumerate(specs):
+            row.grid_columnconfigure(i, weight=1)
+            g = _Gauge(row, title, unit, lo, hi, warn, crit)
+            g.grid(row=0, column=i, padx=6)
+            self.home_gauges[key] = g
+        # Voyant d'alimentation + infos
+        power = tk.Frame(row, bg=theme.BG_CARD)
+        power.grid(row=0, column=len(specs), padx=(16, 6), sticky="nsew")
+        row.grid_columnconfigure(len(specs), weight=1)
+        tk.Label(power, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(2, 6))
+        led_row = tk.Frame(power, bg=theme.BG_CARD)
+        led_row.pack(anchor="w")
+        self.home_power_led = tk.Canvas(led_row, width=34, height=34, bg=theme.BG_CARD, highlightthickness=0)
+        self.home_power_led.pack(side="left")
+        self._home_led_item = self.home_power_led.create_oval(3, 3, 31, 31, fill=theme.MUTED, outline="")
+        self.home_power_text = tk.Label(led_row, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 13, "bold"))
+        self.home_power_text.pack(side="left", padx=(10, 0))
+        self.home_power_sub = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
+        self.home_power_sub.pack(anchor="w", pady=(8, 0))
+        self.home_uptime = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
+        self.home_uptime.pack(anchor="w", pady=(2, 0))
+        clickable = [outer, row, power, led_row, self.home_power_led, self.home_power_text,
+                     self.home_power_sub, self.home_uptime, *self.home_gauges.values()]
+        for w in clickable:
+            w.bind("<Button-1>", lambda _e: self.show_page("health"))
+            try:
+                w.configure(cursor="hand2")
+            except tk.TclError:
+                pass
+
+    def _render_home_gauges(self, data):
+        if not hasattr(self, "home_gauges"):
+            return
+        if data is None:
+            for g in self.home_gauges.values():
+                g.set(None)
+            self.home_power_led.itemconfig(self._home_led_item, fill=theme.MUTED)
+            self.home_power_text.config(text="Indisponible", fg=theme.MUTED)
+            self.home_power_sub.config(text="")
+            self.home_uptime.config(text="")
+            return
+        load, ncpu = data.get("load"), data.get("cpu_count") or 1
+        self.home_gauges["temp"].set(data.get("cpu_temp_c"), "bridage à 80 °C")
+        self.home_gauges["cpu"].set(None if not load else min(100, load[0] / ncpu * 100), f"{ncpu} cœurs")
+        tot, av = data.get("mem_total"), data.get("mem_available")
+        self.home_gauges["mem"].set(None if not tot or av is None else (tot - av) / tot * 100,
+                                    f"{self._fmt_bytes(av)} libres" if av is not None else "")
+        tot, free = data.get("disk_total"), data.get("disk_free")
+        self.home_gauges["disk"].set(None if not tot or free is None else (tot - free) / tot * 100,
+                                     f"{self._fmt_bytes(free)} libres" if free is not None else "")
+        th = data.get("throttled") or {}
+        if th.get("under_voltage_now"):
+            col, txt, sub = theme.RED, "SOUS-TENSION", "en ce moment : la clé SDR peut décrocher"
+        elif th.get("under_voltage_occurred"):
+            col, txt, sub = theme.ORANGE, "À surveiller", "chute de tension depuis le démarrage"
+        elif th:
+            col, txt, sub = theme.GREEN, "Correcte", "aucune sous-tension"
+        else:
+            col, txt, sub = theme.MUTED, "Inconnue", ""
+        self.home_power_led.itemconfig(self._home_led_item, fill=col)
+        self.home_power_text.config(text=txt, fg=col)
+        self.home_power_sub.config(text=sub)
+        up, n = data.get("uptime_s"), data.get("sdr_dongles")
+        parts = []
+        if up is not None:
+            d, rem = divmod(up, 86400)
+            parts.append(f"en marche depuis {d} j {rem // 3600} h" if d else f"en marche depuis {rem // 3600} h {rem % 3600 // 60:02d} min")
+        if n is not None:
+            parts.append(f"{n} clé(s) SDR sur l'USB")
+        self.home_uptime.config(text="  ·  ".join(parts), fg=theme.RED if n == 0 else theme.MUTED)
+
     def _build_home_tiles(self):
+        self._build_home_gauges()
         grid = tk.Frame(self.home_frame, bg=theme.BG)
         grid.pack(fill="both", expand=True, padx=4, pady=4)
 
         self.tile_chips = {}
-        columns = 5
+        columns = 6
         self.tile_frames = {}
         for i, (key, title, subtitle) in enumerate(HOME_TILES):
             r, c = divmod(i, columns)
@@ -2043,26 +2203,76 @@ class App(tk.Tk):
             self.chip_alerts.config(text=f" ⚠ Alertes : {len(recent)} ", bg=theme.RED, fg="#0b0f17")
         else:
             self.chip_alerts.config(text=" Alertes : 0 ", bg=theme.BG_CARD_ALT, fg=theme.TEXT)
+        if "alerts" in getattr(self, "tile_chips", {}):
+            self.tile_chips["alerts"].config(
+                text=(f"⚠ {len(recent)} alerte(s) sur 24 h" if recent else "Aucune alerte"),
+            )
+        self._refresh_alerts_page()
 
     def _show_alert_history(self):
-        if self._alert_window is not None and self._alert_window.winfo_exists():
-            self._alert_window.lift()
+        self.show_page("alerts")
+
+    def _build_alerts_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+        head_outer = theme.card(wrapper)
+        head_outer.pack(fill="x", padx=12, pady=(8, 8))
+        head = head_outer.inner
+        head.configure(padding=14)
+        tk.Label(head, text="Alertes de sécurité", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+        self.alerts_summary = tk.Label(head, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY)
+        self.alerts_summary.pack(side="left", padx=(16, 0))
+        ttk.Button(head, text="Effacer l'historique", style="Flat.TButton", command=self._clear_alerts).pack(side="right")
+        ttk.Button(head, text="Tester l'alerte", style="Flat.TButton",
+                   command=lambda: self._raise_alert(f"test:{time.time()}", "Test d'alerte",
+                                                     "Ceci est un test : la fenêtre et le son fonctionnent.", cooldown=0),
+                   ).pack(side="right", padx=(0, 8))
+        tk.Checkbutton(
+            head, text="Son", variable=self._alert_sound_var, command=self._toggle_alert_sound,
+            bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+            activeforeground=theme.TEXT, font=theme.FONT_BODY, highlightthickness=0,
+        ).pack(side="right", padx=(0, 12))
+
+        info_outer = theme.card(wrapper)
+        info_outer.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(
+            info_outer.inner, text=(
+                "Surveillé en permanence : codes transpondeur 7700 (détresse), 7600 (panne radio), 7500 (intrusion "
+                "illicite) et états d'urgence ADS-B  ·  balises AIS SART / EPIRB / homme à la mer  ·  messages APRS "
+                "adressés à F4JCF  ·  nouveaux courriers Winlink.\nAvion et AIS ne sont surveillés que lorsque leur "
+                "module détient la clé SDR (voir la page Clé SDR pour le partage automatique)."
+            ), bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=1300,
+        ).pack(anchor="w", padx=14, pady=10)
+
+        table_outer = theme.card(wrapper)
+        table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.alerts_tree = ttk.Treeview(table_outer.inner, columns=("time", "title", "text"), show="headings")
+        for col, txt, w in (("time", "Date", 140), ("title", "Alerte", 300), ("text", "Détail", 760)):
+            self.alerts_tree.heading(col, text=txt)
+            self.alerts_tree.column(col, width=w, anchor="w")
+        self.alerts_tree.tag_configure("recent", foreground=theme.RED)
+        self.alerts_tree.pack(fill="both", expand=True, padx=1, pady=1)
+        self._refresh_alerts_page()
+
+    def _refresh_alerts_page(self):
+        if not hasattr(self, "alerts_tree"):
             return
-        win = tk.Toplevel(self)
-        self._alert_window = win
-        win.title("Historique des alertes")
-        win.configure(bg=theme.BG)
-        win.geometry("760x420")
-        tree = ttk.Treeview(win, columns=("time", "title", "text"), show="headings")
-        for col, txt, w in (("time", "Date", 120), ("title", "Alerte", 200), ("text", "Détail", 420)):
-            tree.heading(col, text=txt)
-            tree.column(col, width=w, anchor="w")
-        tree.pack(fill="both", expand=True, padx=10, pady=10)
+        self.alerts_tree.delete(*self.alerts_tree.get_children())
+        now = time.time()
         for a in self._alerts:
-            tree.insert("", "end", values=(time.strftime("%d/%m %H:%M:%S", time.localtime(a["time"])),
-                                           a["title"], a["text"].replace("\n", " · ")))
+            self.alerts_tree.insert(
+                "", "end", values=(time.strftime("%d/%m %H:%M:%S", time.localtime(a["time"])),
+                                   a["title"], a["text"].replace("\n", " · ")),
+                tags=("recent",) if now - a["time"] < 3600 else (),
+            )
         if not self._alerts:
-            tree.insert("", "end", values=("", "Aucune alerte depuis le lancement", ""))
+            self.alerts_tree.insert("", "end", values=("", "Aucune alerte depuis le lancement de l'appli", ""))
+        recent = sum(1 for a in self._alerts if now - a["time"] < 24 * 3600)
+        self.alerts_summary.config(text=f"{recent} alerte(s) ces dernières 24 h" if recent else "Aucune alerte récente")
+
+    def _clear_alerts(self):
+        self._alerts.clear()
+        self._update_alert_chip()
 
     def _toggle_alert_sound(self):
         self.config_data["alert_sound"] = bool(self._alert_sound_var.get())
@@ -2820,6 +3030,7 @@ class App(tk.Tk):
     def _render_health(self, data, error):
         if not hasattr(self, "health_tiles"):
             return
+        self._render_home_gauges(None if error else data)
         if error:
             self.chip_health.config(text="Pi : —", bg=theme.BG_CARD_ALT, fg=theme.TEXT)
             self.health_power_value.config(text="Indisponible", fg=theme.MUTED)
