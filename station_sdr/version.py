@@ -6,4 +6,4 @@ un tag git correspondant (ex: v1.0.1) et le pousser — le workflow GitHub
 Actions se charge de compiler et publier automatiquement.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
