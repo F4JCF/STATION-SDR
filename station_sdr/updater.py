@@ -149,6 +149,24 @@ def apply_update_and_restart(new_exe_path: str) -> None:
     """
     current_exe = sys.executable
     pid = os.getpid()
+    # En mode --onefile, ce processus Python est l'enfant du "bootloader"
+    # PyInstaller, qui détient le verrou sur le .exe et ne se ferme
+    # qu'après nous. On attend donc aussi la fin du parent avant le
+    # remplacement, sinon "move" échoue tant que le .exe est verrouillé.
+    try:
+        parent_pid = os.getppid()
+    except Exception:
+        parent_pid = pid
+
+    # Le .exe téléchargé peut porter la marque "provient d'Internet"
+    # (flux NTFS Zone.Identifier), ce qui déclenche SmartScreen au
+    # relancement automatique : la fenêtre d'avertissement s'ouvre alors
+    # sans qu'on la voie et la nouvelle version ne démarre jamais. On
+    # supprime cette marque (équivalent de "Débloquer" dans Propriétés).
+    try:
+        os.remove(new_exe_path + ":Zone.Identifier")
+    except OSError:
+        pass
 
     # Le script relance l'exécutable dans tous les cas, même si le
     # remplacement échoue au bout de toutes les tentatives : l'utilisateur
@@ -166,7 +184,13 @@ if not errorlevel 1 (
     timeout /t 1 /nobreak >NUL
     goto wait
 )
-echo [%date% %time%] Ancien processus termine >> "%LOG%"
+:waitparent
+tasklist /FI "PID eq {parent_pid}" 2>NUL | find "{parent_pid}" >NUL
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >NUL
+    goto waitparent
+)
+echo [%date% %time%] Ancien processus termine (PID {pid} et parent {parent_pid}) >> "%LOG%"
 
 set tries=0
 :trymove
@@ -207,9 +231,35 @@ del "%~f0"
     # reste sur le réglage le plus courant et le moins susceptible d'être
     # bloqué : une fois ce process Python terminé (os._exit ci-dessous),
     # le script devient de toute façon orphelin et continue de tourner.
+    # CAUSE PRINCIPALE du relancement raté : un .exe PyInstaller --onefile
+    # place dans son environnement des variables internes (_PYI_*,
+    # _MEIPASS2...) qui pointent vers SON dossier temporaire de
+    # décompression. Sans nettoyage, le script batch puis le nouvel .exe
+    # en héritent : le nouvel .exe croit être un sous-processus de
+    # l'ancien, cherche ce dossier temporaire (supprimé entre-temps) et
+    # se ferme aussitôt, avant même que Python ne démarre — d'où les
+    # fenêtres qui s'ouvrent/se ferment sans aucun journal de plantage.
+    # On transmet donc un environnement propre, avec la consigne
+    # officielle PYINSTALLER_RESET_ENVIRONMENT=1.
+    clean_env = {
+        k: v for k, v in os.environ.items()
+        if not k.upper().startswith(("_PYI", "_MEI"))
+    }
+    clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    # Les chemins DLL que PyInstaller ajoute à PATH pointent aussi vers
+    # l'ancien dossier temporaire : on les retire.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and "PATH" in clean_env:
+        clean_env["PATH"] = os.pathsep.join(
+            p for p in clean_env["PATH"].split(os.pathsep)
+            if not p.lower().startswith(meipass.lower())
+        )
+
     subprocess.Popen(
         ["cmd", "/c", batch_path],
         creationflags=subprocess.CREATE_NO_WINDOW,
+        env=clean_env,
+        cwd=os.path.dirname(current_exe) or None,
     )
 
     # sys.exit(0) ne suffit pas ici : cette fonction est appelée depuis un
