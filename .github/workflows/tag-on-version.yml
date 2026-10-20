@@ -1,0 +1,48 @@
+name: Create release tag on version bump
+
+# Dès que station_sdr/version.py change sur main, ce workflow crée et pousse
+# automatiquement le tag git correspondant (ex: v1.1.0). Ce push de tag
+# déclenche à son tour build.yml, qui compile l'exe et publie la Release.
+# Résultat : plus aucune étape manuelle sur github.com — il suffit de
+# committer un nouveau numéro de version sur main.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "station_sdr/version.py"
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extraire la version
+        id: version
+        run: |
+          VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('station_sdr/version.py').read()).group(1))")
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Vérifier si le tag existe déjà
+        id: check
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/${{ steps.version.outputs.tag }}$"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Créer et pousser le tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"

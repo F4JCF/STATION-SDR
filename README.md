@@ -45,15 +45,16 @@ le fichier de configuration local de l'utilisateur
 
 ## Publier une nouvelle version (pour le mainteneur)
 
-1. Mettre à jour `__version__` dans `station_sdr/version.py`.
-2. Committer, puis créer et pousser un tag correspondant :
-   ```
-   git tag v1.0.1
-   git push origin v1.0.1
-   ```
-3. Le workflow GitHub Actions (`.github/workflows/build.yml`) compile
-   automatiquement `STATION-SDR.exe` avec PyInstaller et publie une Release
-   GitHub avec l'exécutable en pièce jointe.
+Entièrement automatique — une seule étape :
+
+1. Mettre à jour `__version__` dans `station_sdr/version.py`, committer et
+   pousser sur `main`.
+
+Le commit déclenche `.github/workflows/tag-on-version.yml`, qui crée et
+pousse automatiquement le tag `vX.Y.Z` correspondant. Ce tag déclenche à son
+tour `.github/workflows/build.yml`, qui compile `STATION-SDR.exe` avec
+PyInstaller et publie une Release GitHub avec l'exécutable en pièce jointe.
+Aucune action manuelle sur github.com n'est nécessaire.
 
 ## Développement local
 
