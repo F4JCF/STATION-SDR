@@ -93,6 +93,17 @@ HOME_TILES = [
     ("services", "Services système", "Vue d'ensemble des services"),
 ]
 
+# Module -> mode de la clé SDR unique (sdr_switch.py sur le Pi). Ouvrir
+# l'une de ces pages bascule la clé vers ce module, ce qui arrête
+# automatiquement le module qui l'utilisait.
+MODULE_SDR_MODE = {
+    "aircraft": "adsb",
+    "ais": "ais",
+    "aprs": "aprs",
+    "openwebrx": "openwebrx",
+}
+SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX"}
+
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
 EXTERNAL_TILES = {
@@ -512,14 +523,61 @@ class App(tk.Tk):
         self._show_view(None)
 
     def show_page(self, key):
+        mode = MODULE_SDR_MODE.get(key)
         if key in EXTERNAL_TILES:
             url = EXTERNAL_TILES[key](self.config_data)
-            try:
-                webbrowser.open(url)
-            except Exception as exc:
-                messagebox.showerror("Ouverture", f"Impossible d'ouvrir {url} :\n{exc}")
+            # OpenWebRX met quelques secondes à démarrer : on n'ouvre le
+            # navigateur qu'une fois la clé basculée.
+            self._switch_sdr(mode, then=lambda: self._open_url(url))
             return
         self._show_view(key)
+        self._switch_sdr(mode)
+
+    def _open_url(self, url):
+        try:
+            webbrowser.open(url)
+        except Exception as exc:
+            messagebox.showerror("Ouverture", f"Impossible d'ouvrir {url} :\n{exc}")
+
+    def _switch_sdr(self, mode, then=None):
+        """Bascule la clé SDR vers `mode` en arrière-plan (sans bloquer
+        l'interface). Sans mode, ou si la clé y est déjà, on enchaîne
+        directement. Si le service de bascule n'est pas installé sur le
+        Pi, on reste silencieux : le reste de l'appli fonctionne."""
+        if not mode or mode == getattr(self, "_sdr_mode", None):
+            if then:
+                then()
+            return
+        if getattr(self, "_sdr_switching", False):
+            return
+        self._sdr_switching = True
+        label = SDR_MODE_LABELS.get(mode, mode)
+        self.chip_sdr.config(text=f"Clé SDR → {label}…")
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_sdr_switch", 5006)
+
+        def worker():
+            try:
+                result = api_client.set_sdr_mode(host, port, mode)
+                error = None if result.get("ok", True) else "échec du démarrage"
+            except Exception as exc:
+                result, error = None, str(exc)
+            self.after(0, done, error)
+
+        def done(error):
+            self._sdr_switching = False
+            if error is None:
+                self._sdr_mode = mode
+                self.chip_sdr.config(text=f"Clé SDR : {label}")
+            else:
+                self.chip_sdr.config(text="Clé SDR : bascule indisponible")
+            if then:
+                # Laisse le temps au service web (OpenWebRX) de démarrer.
+                self.after(4000 if error is None else 0, then)
+            # Rafraîchit tout de suite pour refléter le nouveau service.
+            threading.Thread(target=self._refresh_once, daemon=True).start()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _show_view(self, key):
         self.home_frame.pack_forget()
@@ -570,6 +628,9 @@ class App(tk.Tk):
         self._fetch(lambda: api_client.get_services_status(host, cfg["port_services"]), self._render_services)
         self._fetch(lambda: api_client.get_sdr_status(host, cfg["port_sdr"]), self._render_sdr)
         self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
+        self._fetch(
+            lambda: api_client.get_sdr_mode(host, cfg.get("port_sdr_switch", 5006)), self._render_sdr_mode,
+        )
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -1329,6 +1390,16 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------------- SDR --
 
+    def _render_sdr_mode(self, data, error):
+        """Mémorise le module qui détient actuellement la clé, pour ne pas
+        rebasculer inutilement quand on rouvre la même page."""
+        if error or getattr(self, "_sdr_switching", False):
+            return
+        mode = data.get("mode")
+        if mode:
+            self._sdr_mode = mode
+            self.chip_sdr.config(text=f"Clé SDR : {SDR_MODE_LABELS.get(mode, mode)}")
+
     def _render_sdr(self, data, error):
         frame = self.pages["sdr"]
         if error:
@@ -1337,7 +1408,10 @@ class App(tk.Tk):
         self._clear(frame)
 
         in_use = sum(1 for v in data.values() if v)
-        self.chip_sdr.config(text=f"SDR : {in_use}/{len(data)} occupé(s)")
+        if getattr(self, "_sdr_mode", None):
+            self.chip_sdr.config(text=f"Clé SDR : {SDR_MODE_LABELS.get(self._sdr_mode, self._sdr_mode)}")
+        elif not getattr(self, "_sdr_switching", False):
+            self.chip_sdr.config(text=f"SDR : {in_use}/{len(data)} occupé(s)")
         if "sdr" in self.tile_chips:
             self.tile_chips["sdr"].config(text=f"{in_use}/{len(data)} occupé(s)")
 

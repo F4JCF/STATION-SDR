@@ -155,3 +155,18 @@ python run.py
 ## Licence
 
 MIT — voir [LICENSE](LICENSE).
+
+## Clé SDR unique : bascule automatique entre modules
+
+Avec une seule clé RTL-SDR, ouvrir un module dans l'appli (Trafic aérien,
+AIS, APRS, OpenWebRX) arrête le module précédent et donne la clé au
+nouveau. Côté Pi, installation en une commande :
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_sdr_switch.sh | sudo bash
+```
+
+Le script installe `sdr_switch.py` (port 5006), fait recevoir à Direwolf
+le son de `rtl_fm` sur 144,800 MHz (sauvegarde : `/etc/direwolf.conf.avant-sdr`)
+et désactive le démarrage automatique des modules : au boot, c'est le
+dernier module choisi qui reprend la clé.

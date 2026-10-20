@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
     "port_services": 5003,
     "port_sdr": 5002,
     "port_aprs": 5004,
+    "port_sdr_switch": 5006,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,

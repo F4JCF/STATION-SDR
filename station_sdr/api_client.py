@@ -51,6 +51,24 @@ def get_aprs_stations(host: str, port: int) -> list:
     return resp.json()
 
 
+def set_sdr_mode(host: str, port: int, mode: str) -> dict:
+    """Bascule l'unique clé SDR vers un module via sdr_switch.py (POST).
+    Délai plus long : arrêter un service puis en démarrer un autre prend
+    quelques secondes."""
+    url = f"http://{host}:{port}/api/sdr/mode/{mode}"
+    resp = requests.post(url, timeout=45)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_sdr_mode(host: str, port: int) -> dict:
+    """Mode actuel de la clé SDR (sdr_switch.py)."""
+    url = f"http://{host}:{port}/api/sdr/mode"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def restart_service(host: str, port: int, key: str) -> dict:
     """Demande le redémarrage d'un service via station_api.py (POST)."""
     url = f"http://{host}:{port}/api/services/{key}/restart"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Bascule de la cle SDR unique entre ADS-B / AIS / APRS / OpenWebRX
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=SDR_SWITCH_PORT=5006
+ExecStart=/usr/bin/python3 /usr/local/bin/sdr_switch.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
