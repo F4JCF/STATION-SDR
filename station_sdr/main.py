@@ -594,7 +594,114 @@ class App(tk.Tk):
         self.after(200, self._check_update_on_startup)
         self._start_refresh_loop()
 
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        self._tray_icon = None
+        self.after(500, self._start_tray)
+        if "--minimized" in sys.argv:
+            # Lancé au démarrage de Windows : on reste discrètement près de
+            # l'horloge, les alertes continuent d'arriver.
+            self.after(800, self._hide_to_tray)
+
+    # ------------------------------------------- Zone de notification --
+
+    RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+    def _autostart_enabled(self):
+        if sys.platform != "win32":
+            return False
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.RUN_KEY) as k:
+                winreg.QueryValueEx(k, "STATION-SDR")
+            return True
+        except OSError:
+            return False
+
+    def _toggle_autostart(self):
+        want = bool(self._autostart_var.get())
+        if sys.platform != "win32" or not getattr(sys, "frozen", False):
+            messagebox.showinfo("Démarrage avec Windows", "Disponible uniquement avec STATION-SDR.exe sous Windows.")
+            self._autostart_var.set(False)
+            return
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+                if want:
+                    winreg.SetValueEx(k, "STATION-SDR", 0, winreg.REG_SZ, f'"{sys.executable}" --minimized')
+                else:
+                    try:
+                        winreg.DeleteValue(k, "STATION-SDR")
+                    except OSError:
+                        pass
+        except OSError as exc:
+            messagebox.showerror("Démarrage avec Windows", f"Réglage impossible : {exc}")
+            self._autostart_var.set(not want)
+
+    def _toggle_close_to_tray(self):
+        self.config_data["close_to_tray"] = bool(self._close_tray_var.get())
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+
+    def _start_tray(self):
+        """Icône près de l'horloge (Windows). Sans pystray (ou hors
+        Windows), l'appli fonctionne simplement sans cette icône."""
+        if sys.platform != "win32":
+            return
+        try:
+            import pystray
+        except Exception:
+            return
+        try:
+            try:
+                ico = Image.open(_resource_path("assets/icon.ico"))
+                ico.size = (64, 64)
+                image = ico.convert("RGBA")
+            except Exception:
+                image = Image.open(_resource_path("assets/logo.png")).convert("RGBA").resize((64, 64))
+            menu = pystray.Menu(
+                pystray.MenuItem("Ouvrir STATION-SDR", lambda *_: self.after(0, self._show_from_tray), default=True),
+                pystray.MenuItem("Arrêter la clé SDR", lambda *_: self.after(0, lambda: (self._show_from_tray(), self._stop_sdr()))),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Quitter", lambda *_: self.after(0, self._on_close)),
+            )
+            self._tray_icon = pystray.Icon("STATION-SDR", image, "STATION-SDR — F4JCF", menu)
+            self._tray_icon.run_detached()
+        except Exception as exc:
+            _log_crash(f"Icône de la zone de notification indisponible : {exc}", context="tray")
+            self._tray_icon = None
+
+    def _tray_notify(self, title, text):
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.notify(text[:250], title[:60])
+            except Exception:
+                pass
+
+    def _hide_to_tray(self):
+        if self._tray_icon is None:
+            self.iconify()
+            return
+        self.withdraw()
+        if not getattr(self, "_tray_hint_shown", False):
+            self._tray_hint_shown = True
+            self._tray_notify("STATION-SDR continue en arrière-plan",
+                              "Les alertes restent actives. Double-cliquez sur l'icône pour rouvrir la fenêtre.")
+
+    def _show_from_tray(self):
+        self.deiconify()
+        self.lift()
+        try:
+            self.focus_force()
+        except tk.TclError:
+            pass
+
+    def _on_window_close(self):
+        if self._tray_icon is not None and self.config_data.get("close_to_tray", True):
+            self._hide_to_tray()
+        else:
+            self._on_close()
 
     # ---------------------------------------------------------------- UI --
 
@@ -610,6 +717,16 @@ class App(tk.Tk):
         app_menu.add_command(label="Historique des alertes", command=self._show_alert_history)
         app_menu.add_separator()
         app_menu.add_command(label="Arrêter la clé SDR", command=lambda: self._stop_sdr())
+        app_menu.add_separator()
+        self._autostart_var = tk.BooleanVar(value=self._autostart_enabled())
+        app_menu.add_checkbutton(label="Lancer au démarrage de Windows", variable=self._autostart_var,
+                                 command=self._toggle_autostart)
+        self._close_tray_var = tk.BooleanVar(value=self.config_data.get("close_to_tray", True))
+        app_menu.add_checkbutton(label="Fermer = réduire près de l'horloge", variable=self._close_tray_var,
+                                 command=self._toggle_close_to_tray)
+        app_menu.add_command(label="Ouvrir le tableau de bord du téléphone",
+                             command=lambda: self._open_url(
+                                 f"http://{self.config_data.get('pi_host', '192.168.1.229')}:{self.config_data.get('port_monitor', 5008)}/"))
         app_menu.add_separator()
         app_menu.add_command(label="Quitter", command=self._on_close)
         menubar.add_cascade(label="STATION-SDR", menu=app_menu)
@@ -2331,6 +2448,7 @@ class App(tk.Tk):
         self._update_alert_chip()
         if self.config_data.get("alert_sound", True):
             self._alert_sound()
+        self._tray_notify(f"⚠ {title}", text)
         self._show_alert_popup(title, text)
 
     def _alert_sound(self):
@@ -3341,6 +3459,7 @@ class App(tk.Tk):
         self._sdr_switch_data = data
         if data.get("last_mode"):
             self._sdr_last_mode = data["last_mode"]
+        self._render_pi_version(data)
         if getattr(self, "_sdr_switching", False):
             return
         mode = data.get("mode")
@@ -3682,11 +3801,105 @@ class App(tk.Tk):
                      width=26).grid(row=1, column=4, sticky="w", pady=(10, 0))
         ttk.Button(m, text="Afficher", style="Flat.TButton", command=self._show_service_log).grid(
             row=1, column=5, sticky="w", padx=(6, 0), pady=(10, 0))
-        self.health_maint_status = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
-        self.health_maint_status.grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        upd_row = tk.Frame(m, bg=theme.BG_CARD)
+        upd_row.grid(row=2, column=0, columnspan=6, sticky="w", pady=(10, 0))
+        self.health_update_btn = ttk.Button(upd_row, text="Mettre à jour le Pi", style="Accent.TButton",
+                                            command=lambda: self._update_pi(ask=True))
+        self.health_update_btn.pack(side="left")
+        self.health_version_label = tk.Label(upd_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
+                                             justify="left", wraplength=1100)
+        self.health_version_label.pack(side="left", padx=(10, 0))
+        self.health_maint_status = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                            justify="left", wraplength=1300)
+        self.health_maint_status.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
 
     def _pi_endpoint(self):
         return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_sdr_switch", 5006)
+
+    def _render_pi_version(self, data):
+        """Compare la version des scripts du Pi à celle de l'appli, et
+        propose une fois par session de mettre le Pi à jour."""
+        if not hasattr(self, "health_version_label"):
+            return
+        app_v = f"v{__version__}"
+        if "pi_version" not in data:
+            self.health_version_label.config(
+                text="Le Pi utilise une ancienne version du service de bascule : une dernière mise à jour par SSH "
+                     "est nécessaire (commande donnée dans la conversation), ensuite ce bouton suffira.",
+                fg=theme.ORANGE)
+            return
+        pi_v = data.get("pi_version")
+        if pi_v == app_v:
+            self.health_version_label.config(text=f"Pi à jour ({pi_v}).", fg=theme.GREEN)
+            return
+        self.health_version_label.config(
+            text=f"Scripts du Pi : {pi_v or 'version inconnue'}  ·  appli : {app_v}  →  mise à jour conseillée.",
+            fg=theme.ORANGE)
+        if not getattr(self, "_pi_update_prompted", False) and not getattr(self, "_pi_updating", False):
+            self._pi_update_prompted = True
+            self.after(1500, lambda: self._update_pi(ask=True, auto=True, pi_v=pi_v))
+
+    def _update_pi(self, ask=True, auto=False, pi_v=None):
+        app_v = f"v{__version__}"
+        if getattr(self, "_pi_updating", False):
+            return
+        if ask:
+            intro = (f"Les scripts du Raspberry Pi ({pi_v or 'version inconnue'}) ne correspondent pas à cette "
+                     f"version de l'appli ({app_v}).\n\n") if auto else ""
+            if not messagebox.askyesno(
+                "Mettre à jour le Pi",
+                intro + f"Installer sur le Pi les scripts de la version {app_v} ?\n\nLes services du Pi "
+                "redémarrent quelques secondes ; vos réglages sont conservés.",
+            ):
+                return
+        host, port = self._pi_endpoint()
+        self._pi_updating = True
+        self.health_update_btn.config(state="disabled")
+        self.health_maint_status.config(text=f"Mise à jour du Pi vers {app_v}…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                api_client.pi_update(host, port, app_v)
+            except Exception as exc:
+                self.after(0, finish, False, f"Échec du lancement : {exc}")
+                return
+            deadline = time.time() + 120
+            last_log = ""
+            while time.time() < deadline:
+                time.sleep(2)
+                try:
+                    st = api_client.get_pi_update_status(host, port)
+                except Exception:
+                    continue  # le service redémarre : on réessaie
+                last_log = "\n".join(st.get("log") or [])
+                self.after(0, lambda t=last_log: self.health_maint_status.config(text=t, fg=theme.MUTED))
+                res = st.get("result")
+                if res and not st.get("running"):
+                    if res.get("ok"):
+                        # Attendre que le service redémarré réponde avec la nouvelle version.
+                        for _ in range(15):
+                            time.sleep(2)
+                            try:
+                                if api_client.get_pi_update_status(host, port).get("pi_version") == app_v:
+                                    break
+                            except Exception:
+                                pass
+                        self.after(0, finish, True, f"Pi mis à jour en {app_v}.")
+                    else:
+                        self.after(0, finish, False, f"Échec : {res.get('error')}\n{last_log}")
+                    return
+            self.after(0, finish, False, "Pas de réponse du Pi après 2 minutes.\n" + last_log)
+
+        def finish(ok, msg):
+            self._pi_updating = False
+            self.health_update_btn.config(state="normal")
+            self.health_maint_status.config(text=msg, fg=theme.GREEN if ok else theme.RED)
+            if ok:
+                self.health_version_label.config(text=f"Pi à jour ({app_v}).", fg=theme.GREEN)
+                messagebox.showinfo("Mise à jour du Pi", msg)
+            threading.Thread(target=self._refresh_once, daemon=True).start()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _power_action(self, action):
         verb = "redémarrer" if action == "reboot" else "éteindre"
@@ -4037,6 +4250,11 @@ class App(tk.Tk):
 
     def _on_close(self):
         self._stop_event.set()
+        if getattr(self, "_tray_icon", None) is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
         self.destroy()
 
     def _on_callback_exception(self, exc_type, exc_value, exc_tb):

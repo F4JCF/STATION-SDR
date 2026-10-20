@@ -408,6 +408,95 @@ def _backup_tar() -> bytes:
     return buf.getvalue()
 
 
+# --------------------------------------------------- Mise à jour du Pi --
+#
+# L'appli demande d'installer les scripts de SA version (tag vX.Y.Z du
+# dépôt public). Liste de fichiers fermée : rien d'autre ne peut être
+# téléchargé ou écrit par ce biais.
+
+REPO_RAW = "https://raw.githubusercontent.com/F4JCF/STATION-SDR"
+PI_FILES = [
+    # (fichier du dépôt, destination sur le Pi, mode)
+    ("raspberry/sdr_switch.py", "/usr/local/bin/sdr_switch.py", 0o755),
+    ("raspberry/station_monitor.py", "/usr/local/bin/station_monitor.py", 0o755),
+    ("raspberry/svxlink_api.py", "/usr/local/bin/svxlink_api.py", 0o755),
+    ("raspberry/aprs_api.py", "/home/f4jcf/aprs_api.py", 0o755),
+    ("raspberry/sdr-switch.service", "/etc/systemd/system/sdr-switch.service", 0o644),
+    ("raspberry/station-monitor.service", "/etc/systemd/system/station-monitor.service", 0o644),
+    ("raspberry/svxlink-api.service", "/etc/systemd/system/svxlink-api.service", 0o644),
+    ("raspberry/aprs-api.service", "/etc/systemd/system/aprs-api.service", 0o644),
+    ("raspberry/direwolf-sdr.conf", "/etc/systemd/system/direwolf.service.d/sdr.conf", 0o644),
+]
+PI_VERSION_FILE = os.path.join(STATE_DIR, "pi_version")
+_update_state = {"running": False, "log": [], "result": None}
+
+
+def _read_pi_version():
+    try:
+        with open(PI_VERSION_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _update_pi(ref: str) -> None:
+    import urllib.request
+    log_lines = _update_state["log"]
+    log_lines.clear()
+
+    def say(msg):
+        log.info("Mise à jour : %s", msg)
+        log_lines.append(msg)
+
+    try:
+        say(f"Téléchargement des scripts de la version {ref}")
+        fetched = []
+        for src, dest, mode in PI_FILES:
+            if not os.path.exists(dest) and "sdr_switch" not in dest and "sdr-switch" not in dest:
+                continue  # composant jamais installé sur ce Pi : on ne l'ajoute pas
+            url = f"{REPO_RAW}/{ref}/{src}"
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                data = resp.read()
+            if not data:
+                raise RuntimeError(f"fichier vide : {src}")
+            if src.endswith(".py"):
+                compile(data, src, "exec")  # refuse un script illisible
+            fetched.append((data, dest, mode))
+            say(f"  {src} téléchargé ({len(data)} octets)")
+        for data, dest, mode in fetched:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            tmp = dest + ".new"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.chmod(tmp, mode)
+            if dest.startswith("/home/f4jcf/"):
+                try:
+                    import pwd
+                    pw = pwd.getpwnam("f4jcf")
+                    os.chown(tmp, pw.pw_uid, pw.pw_gid)
+                except (KeyError, OSError):
+                    pass
+            os.replace(tmp, dest)
+        say(f"{len(fetched)} fichier(s) installé(s)")
+        _systemctl("daemon-reload")
+        for unit in ("aprs-api", "svxlink-api", "station-monitor"):
+            if _systemctl("is-enabled", f"{unit}.service").stdout.strip() == "enabled":
+                _systemctl("restart", f"{unit}.service")
+                say(f"  {unit} redémarré")
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(PI_VERSION_FILE, "w", encoding="utf-8") as f:
+            f.write(ref)
+        _update_state["result"] = {"ok": True, "version": ref, "time": time.time()}
+        say("Terminé. Le service de bascule redémarre (quelques secondes).")
+        time.sleep(1)
+        subprocess.run(["systemctl", "--no-block", "restart", "sdr-switch.service"], timeout=10)
+    except Exception as exc:
+        say(f"ÉCHEC : {exc}")
+        _update_state["result"] = {"ok": False, "error": str(exc), "time": time.time()}
+    finally:
+        _update_state["running"] = False
+
+
 def _power_action(action: str) -> None:
     time.sleep(2)  # laisse le temps à la réponse HTTP de partir
     subprocess.run(["systemctl", "reboot" if action == "reboot" else "poweroff"], timeout=30)
@@ -428,6 +517,7 @@ def _mode_status() -> dict:
         "next_change": _sched_state["next_change"],
         "labels": LABELS,
         "last_mode": _read_last_mode(),
+        "pi_version": _read_pi_version(),
     }
 
 
@@ -461,6 +551,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 lines = 60
             self._send(200, {"unit": unit, "label": LOG_UNITS[unit], "text": _service_logs(unit, lines)})
+        elif path == "/api/system/update":
+            self._send(200, {**_update_state, "pi_version": _read_pi_version()})
         elif path == "/api/system/log-units":
             self._send(200, LOG_UNITS)
         elif path == "/api/system/backup":
@@ -482,6 +574,20 @@ class Handler(BaseHTTPRequestHandler):
             log.warning("Demande de %s depuis %s", action, self.address_string())
             self._send(200, {"ok": True, "action": action})
             threading.Thread(target=_power_action, args=(action,), daemon=True).start()
+            return
+        if path == "/api/system/update":
+            from urllib.parse import parse_qs, urlparse
+            import re as _re
+            ref = (parse_qs(urlparse(self.path).query).get("ref") or [""])[0]
+            if not _re.fullmatch(r"v\d+\.\d+\.\d+", ref):
+                self._send(400, {"error": "version invalide (attendu vX.Y.Z)"})
+                return
+            if _update_state["running"]:
+                self._send(409, {"error": "mise à jour déjà en cours"})
+                return
+            _update_state.update(running=True, result=None)
+            threading.Thread(target=_update_pi, args=(ref,), daemon=True).start()
+            self._send(200, {"started": True, "ref": ref})
             return
         if path == "/api/sdr/schedule":
             try:

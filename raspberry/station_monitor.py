@@ -139,14 +139,28 @@ def send_ntfy(cfg: dict, title: str, message: str, priority: int) -> None:
     n = cfg["ntfy"]
     if not n.get("topic"):
         raise ValueError("aucun sujet ntfy configuré")
-    body = json.dumps({
+    payload = {
         "topic": n["topic"], "title": title, "message": message, "priority": priority,
         "tags": ["rotating_light"] if priority >= 5 else ["warning"] if priority >= 4 else ["satellite"],
-    }).encode("utf-8")
+    }
+    ip = lan_ip()
+    if ip:
+        payload["click"] = f"http://{ip}:{PORT}/"  # un appui ouvre le tableau de bord (à la maison)
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(n.get("server", "https://ntfy.sh").rstrip("/") + "/", data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=15) as resp:
         resp.read()
+
+
+def lan_ip():
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(("192.168.1.254", 9))  # aucun paquet envoyé : sert à choisir l'interface
+            return sk.getsockname()[0]
+    except OSError:
+        return None
 
 
 def send_email(cfg: dict, title: str, message: str) -> None:
@@ -519,6 +533,120 @@ def polar(kind: str, hours: float) -> dict:
     return {"kind": kind, "hours": hours, "sector_deg": 10, "max_km": sectors}
 
 
+DASH_HTML = r"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0f17">
+<title>F4JCF-SDR-STATION</title>
+<style>
+:root{--bg:#0b0f17;--card:#141b27;--alt:#1b2433;--border:#23304a;--text:#e6edf3;--muted:#8b96a5;
+--accent:#ff7a1a;--green:#3fb950;--red:#f85149;--orange:#d29922;--yellow:#eab308}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);
+font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:12px 12px 40px}
+h1{font-size:19px;margin:4px 0 2px}.sub{color:var(--muted);font-size:12px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+.lbl{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.big{font-size:22px;font-weight:700;margin-top:2px}.row{display:flex;gap:10px;flex-wrap:wrap}
+.tile{flex:1 1 140px;background:var(--alt);border-radius:10px;padding:10px}
+.green{color:var(--green)}.red{color:var(--red)}.orange{color:var(--orange)}.muted{color:var(--muted)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+button{font:inherit;font-weight:700;border:0;border-radius:9px;padding:11px 14px;background:var(--alt);color:var(--text)}
+button.on{background:var(--accent);color:#1a1200}button.stop{background:var(--red);color:#0b0f17}
+button:disabled{opacity:.5}
+.pill{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;color:#0b0f17}
+.alert{border-left:4px solid var(--red);padding:6px 10px;margin:6px 0;background:var(--alt);border-radius:6px}
+.alert .t{font-size:11px;color:var(--muted)}.err{color:var(--red);font-size:13px}
+</style></head><body>
+<h1>F4JCF-SDR-STATION</h1><div class="sub" id="upd">Chargement…</div>
+<div class="card"><div class="lbl">Clé SDR</div><div class="big" id="mode">—</div>
+<div class="muted" id="modeinfo"></div><div class="btns" id="btns"></div><div class="err" id="btnerr"></div></div>
+<div class="card"><div class="lbl">Activité</div><div class="row" id="act"></div></div>
+<div class="card"><div class="lbl">Santé du Pi</div><div class="row" id="health"></div></div>
+<div class="card"><div class="lbl">Vigilance Météo-France</div><div id="vigi" class="muted">—</div></div>
+<div class="card"><div class="lbl">Dernières alertes</div><div id="alerts" class="muted">—</div></div>
+<script>
+const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",off:"Arrêtée"};
+const VC={1:["#3fb950","VERT"],2:["#eab308","JAUNE"],3:["#f97316","ORANGE"],4:["#f85149","ROUGE"]};
+let busy=false;
+function tile(l,v,c,s){return `<div class="tile"><div class="lbl">${l}</div><div class="big ${c||""}">${v}</div>${s?`<div class="muted" style="font-size:12px">${s}</div>`:""}</div>`}
+function esc(t){return String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+async function setMode(m){
+  if(busy)return;
+  if(m==="off"&&!confirm("Arrêter tous les modules qui utilisent la clé SDR ?"))return;
+  busy=true;document.getElementById("btnerr").textContent="Bascule en cours…";render(window._d);
+  try{const r=await fetch("/api/dash/sdr/"+m,{method:"POST"});if(!r.ok)throw new Error("erreur "+r.status);
+      document.getElementById("btnerr").textContent=""}
+  catch(e){document.getElementById("btnerr").textContent="Échec : "+e.message}
+  busy=false;load()}
+function render(d){
+  if(!d)return;window._d=d;const m=d.mode||{};const h=d.health||{};const th=h.throttled||{};
+  document.getElementById("mode").innerHTML=m.mode==="off"?'<span class="red">Arrêtée</span>':`<span style="color:var(--accent)">${L[m.mode]||"—"}</span>`;
+  const sched={manual:"manuel",rotation:"rotation",planning:"planning horaire"}[(m.schedule||{}).type]||"—";
+  document.getElementById("modeinfo").textContent=m.mode==="off"?"tous les modules sont arrêtés":"partage : "+sched;
+  let b="";for(const k of ["adsb","ais","aprs","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
+    b+=`<button class="${k===m.mode?"on":""}" ${(!ok||busy)?"disabled":""} onclick="setMode('${k}')">${L[k]}</button>`}
+  b+=`<button class="stop" ${(m.mode==="off"||busy)?"disabled":""} onclick="setMode('off')">■ Arrêter</button>`;
+  document.getElementById("btns").innerHTML=b;
+  const a=d.activity||{};
+  document.getElementById("act").innerHTML=
+    tile("Avions",a.aircraft??"—",m.mode==="adsb"?"":"muted",m.mode==="adsb"?"":"en pause")+
+    tile("Navires",a.ships??"—",m.mode==="ais"?"":"muted",m.mode==="ais"?"":"en pause")+
+    tile("Stations APRS",a.aprs??"—","", "30 dernières min")+
+    tile("Winlink",a.winlink_unread??"—",a.winlink_unread?"orange":"","non lu(s)");
+  const t=h.cpu_temp_c, pc=h.load&&h.cpu_count?Math.round(h.load[0]/h.cpu_count*100):null;
+  const mem=h.mem_total?Math.round((h.mem_total-h.mem_available)/h.mem_total*100):null;
+  const pw=th.under_voltage_now?["SOUS-TENSION","red"]:th.under_voltage_occurred?["À surveiller","orange"]:(h.throttled?["Correcte","green"]:["—","muted"]);
+  document.getElementById("health").innerHTML=
+    tile("Alimentation",pw[0],pw[1])+
+    tile("Température",t!=null?t.toFixed(0)+" °C":"—",t>=80?"red":t>=70?"orange":"green")+
+    tile("Charge CPU",pc!=null?pc+" %":"—",pc>=90?"red":pc>=70?"orange":"")+
+    tile("Mémoire",mem!=null?mem+" %":"—","")+
+    tile("Clés SDR",h.sdr_dongles??"—",h.sdr_dongles===0?"red":"",h.sdr_dongles===0?"aucune clé visible !":"");
+  const v=d.vigilance||{};let vh="";
+  if(v.status!=="ok"){vh=esc("Vigilance : "+(v.status||"—"))}
+  else for(const p of v.periods||[]){const c=VC[p.max_color]||["#8b96a5","?"];
+    vh+=`<div style="margin:4px 0"><b>${p.echeance==="J"?"Aujourd'hui":"Demain"}</b> <span class="pill" style="background:${c[0]}">${c[1]}</span> <span class="muted">${esc((p.phenomena||[]).map(x=>x.name+" ("+x.color_name+")").join(", ")||"rien de particulier")}</span></div>`}
+  document.getElementById("vigi").innerHTML=vh||"—";
+  const al=d.alerts||[];
+  document.getElementById("alerts").innerHTML=al.length?al.map(x=>`<div class="alert"><div class="t">${new Date(x.time*1000).toLocaleString("fr-FR")}</div><b>${esc(x.title)}</b><div class="muted">${esc(x.message)}</div></div>`).join(""):"Aucune alerte récente.";
+  document.getElementById("upd").textContent="Mis à jour à "+new Date().toLocaleTimeString("fr-FR")+" · actualisation toutes les 10 s";
+}
+async function load(){try{const r=await fetch("/api/dash");render(await r.json())}
+  catch(e){document.getElementById("upd").innerHTML='<span class="err">Pi injoignable</span>'}}
+load();setInterval(()=>{if(!busy)load()},10000);
+</script></body></html>
+"""
+
+
+def dash_data() -> dict:
+    """Résumé pour le tableau de bord du téléphone (une seule requête)."""
+    mode = fetch_json("http://127.0.0.1:5006/api/sdr/mode") or {}
+    health = fetch_json("http://127.0.0.1:5006/api/system/health") or {}
+    m = mode.get("mode")
+    activity = {}
+    if m == "adsb":
+        ac = read_aircraft() or {}
+        activity["aircraft"] = sum(1 for a in ac.get("aircraft", []) if (a.get("seen") or 0) < 60)
+    if m == "ais":
+        ships = fetch_json("http://127.0.0.1:8100/api/ships.json") or {}
+        activity["ships"] = len(ships.get("ships", [])) if isinstance(ships, dict) else None
+    st = fetch_json("http://127.0.0.1:5004/api/aprs/stations")
+    if isinstance(st, list):
+        activity["aprs"] = sum(1 for x in st if time.time() - (x.get("last_heard") or 0) < 1800)
+    inbox = fetch_json("http://127.0.0.1:8080/api/mailbox/in")
+    if isinstance(inbox, list):
+        activity["winlink_unread"] = sum(1 for x in inbox if x.get("Unread"))
+    with _lock:
+        alerts = [a for a in _sent if time.time() - a["time"] < 48 * 3600][:10]
+    return {"mode": mode, "health": health, "activity": activity, "vigilance": dict(_vigilance), "alerts": alerts}
+
+
+def proxy_sdr_mode(mode: str):
+    req = urllib.request.Request(f"http://127.0.0.1:5006/api/sdr/mode/{mode}", data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -538,7 +666,16 @@ class Handler(BaseHTTPRequestHandler):
             hours = float((q.get("hours") or ["24"])[0])
         except ValueError:
             hours = 24
-        if path == "/api/stats/series":
+        if path in ("", "/index.html"):
+            body = DASH_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/dash":
+            self._send(200, dash_data())
+        elif path == "/api/stats/series":
             self._send(200, series(hours))
         elif path == "/api/stats/polar":
             kind = (q.get("kind") or ["adsb"])[0]
@@ -562,6 +699,15 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
         if path == "/api/monitor/config":
             self._send(200, public_config(update_config(data if isinstance(data, dict) else {})))
+        elif path.startswith("/api/dash/sdr/"):
+            mode = path.rsplit("/", 1)[-1]
+            if mode not in ("adsb", "ais", "aprs", "openwebrx", "off"):
+                self._send(400, {"error": "module inconnu"})
+                return
+            try:
+                self._send(200, proxy_sdr_mode(mode))
+            except Exception as exc:
+                self._send(502, {"error": str(exc)})
         elif path == "/api/monitor/test":
             res = notify("Test de notification",
                          "Si vous lisez ceci, les alertes de F4JCF-SDR-STATION arrivent bien. 73 !", 3, force=True)

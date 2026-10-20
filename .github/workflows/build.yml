@@ -38,6 +38,8 @@ jobs:
           pyinstaller --onefile --windowed --name STATION-SDR `
             --icon station_sdr/assets/icon.ico `
             --add-data "station_sdr/assets/logo.png;assets" `
+            --add-data "station_sdr/assets/icon.ico;assets" `
+            --hidden-import pystray._win32 `
             --collect-all tkintermapview --collect-all PIL run.py
 
       - name: Create GitHub Release

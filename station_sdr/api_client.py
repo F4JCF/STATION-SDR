@@ -152,6 +152,19 @@ def monitor_test(host: str, port: int) -> dict:
     return resp.json()
 
 
+def pi_update(host: str, port: int, ref: str) -> dict:
+    """Demande au Pi d'installer les scripts de la version `ref` (vX.Y.Z)."""
+    resp = requests.post(f"http://{host}:{port}/api/system/update", params={"ref": ref}, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_pi_update_status(host: str, port: int) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/system/update", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_sdr_mode(host: str, port: int) -> dict:
     """Mode actuel de la clé SDR (sdr_switch.py)."""
     url = f"http://{host}:{port}/api/sdr/mode"
