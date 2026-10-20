@@ -119,6 +119,19 @@ fermeture de l'application puis déplace le nouveau fichier en place
   `STATION-SDR.exe` manuellement depuis les
   [Releases](https://github.com/F4JCF/STATION-SDR/releases/latest).
 
+Autre cas possible : la fenêtre s'ouvre puis se referme aussitôt juste
+après un redémarrage automatique (nouvelle version qui plante dès le
+démarrage, ou une erreur imprévue pendant l'utilisation). Comme
+l'exécutable est compilé en mode `--windowed` (sans console), ce genre
+d'erreur serait normalement totalement invisible. Pour éviter ça,
+l'application :
+
+- enregistre toute erreur de ce type dans
+  `%TEMP%\station_sdr_crash.log` ;
+- affiche une boîte de dialogue d'erreur au moment du plantage si
+  possible, et sinon le signale automatiquement au prochain démarrage
+  réussi (une seule fois).
+
 ## Publier une nouvelle version (pour le mainteneur)
 
 Entièrement automatique — une seule étape :

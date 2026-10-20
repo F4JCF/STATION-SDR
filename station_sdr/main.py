@@ -10,9 +10,11 @@ import io
 import math
 import os
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
+import traceback
 import webbrowser
 from collections import deque
 from tkinter import messagebox, simpledialog, ttk
@@ -43,6 +45,25 @@ def _resource_path(relative_path: str) -> str:
     ses données dans un dossier temporaire désigné par sys._MEIPASS)."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative_path)
+
+
+CRASH_LOG_PATH = os.path.join(tempfile.gettempdir(), "station_sdr_crash.log")
+
+
+def _log_crash(tb_text: str, context: str) -> None:
+    """Journalise une erreur non affichée nulle part d'autre — build
+    --windowed (pas de console), donc toute exception non rattrapée est
+    normalement totalement invisible pour l'utilisateur. Utilisé à la fois
+    pour un plantage au tout début du démarrage et pour une exception
+    levée dans un callback Tkinter (bind/after/command=), que Tkinter
+    attrape et route en interne sans jamais la faire remonter (c'est ce
+    même mécanisme qui a longtemps masqué le bug du redémarrage auto)."""
+    try:
+        with open(CRASH_LOG_PATH, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ({context}) ===\n{tb_text}\n")
+    except OSError:
+        pass
+
 
 # Coordonnées connues des stations météo (code OACI -> lat, lon), avec un
 # repli sur Mougins si le code renvoyé par l'API n'est pas reconnu.
@@ -289,6 +310,13 @@ def _find_service(data: dict, *name_fragments: str):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        # Par défaut, Tkinter attrape en interne toute exception levée
+        # dans un callback (bind/after/command=...) et se contente de
+        # l'imprimer sur stderr — invisible dans un exécutable --windowed
+        # (pas de console). On la journalise explicitement à la place,
+        # sinon un bug dans un rafraîchissement périodique ou un clic
+        # disparaît sans aucune trace.
+        self.report_callback_exception = self._on_callback_exception
         self.title(APP_TITLE)
         self.geometry("1040x680")
         self.minsize(860, 560)
@@ -1368,6 +1396,30 @@ class App(tk.Tk):
             "télécharger et remplacer l'exécutable manuellement depuis :\n"
             "https://github.com/F4JCF/STATION-SDR/releases/latest",
         )
+        self._check_crash_log()
+
+    def _check_crash_log(self):
+        """Signale une seule fois un plantage (démarrage précédent ou
+        callback) déjà enregistré dans CRASH_LOG_PATH, sans jamais
+        re-notifier le même événement en boucle à chaque démarrage. On ne
+        supprime pas le fichier (utile pour du support), on retient juste
+        la date de modification déjà signalée dans la configuration."""
+        try:
+            mtime = os.path.getmtime(CRASH_LOG_PATH)
+        except OSError:
+            return
+        last_notified = self.config_data.get("_last_crash_notified_mtime", 0)
+        if mtime <= last_notified:
+            return
+        self.config_data["_last_crash_notified_mtime"] = mtime
+        save_config(self.config_data)
+        messagebox.showwarning(
+            "Erreur détectée lors d'un démarrage précédent",
+            "L'application a rencontré une erreur imprévue lors d'une précédente "
+            "ouverture (par exemple juste après une mise à jour) et a dû se fermer.\n\n"
+            f"Détails complets enregistrés dans :\n{CRASH_LOG_PATH}\n\n"
+            "Si le problème se reproduit, ce fichier aidera à comprendre la cause.",
+        )
 
     def _check_update_on_startup(self):
         if not self.config_data.get("check_updates", True):
@@ -1453,10 +1505,44 @@ class App(tk.Tk):
         self._stop_event.set()
         self.destroy()
 
+    def _on_callback_exception(self, exc_type, exc_value, exc_tb):
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        _log_crash(tb_text, context="callback")
+
 
 def main():
-    app = App()
-    app.mainloop()
+    # Avec --windowed (pas de console), une exception non rattrapée au
+    # démarrage se termine en silence : la fenêtre ne s'ouvre jamais (ou
+    # se ferme instantanément) sans qu'on en sache la raison. C'est
+    # exactement le symptôme observé après un redémarrage automatique qui
+    # tombe sur une nouvelle version buguée — ce filet de sécurité rend
+    # l'erreur visible (boîte de dialogue + journal) au lieu de laisser
+    # l'exécutable disparaître sans aucune trace.
+    try:
+        app = App()
+        app.mainloop()
+    except Exception:
+        _handle_startup_crash()
+
+
+def _handle_startup_crash():
+    tb = traceback.format_exc()
+    _log_crash(tb, context="démarrage")
+
+    try:
+        error_root = tk.Tk()
+        error_root.withdraw()
+        last_line = tb.strip().splitlines()[-1] if tb.strip() else "Erreur inconnue"
+        messagebox.showerror(
+            "STATION-SDR — erreur au démarrage",
+            "L'application a rencontré une erreur au démarrage et n'a pas pu s'ouvrir "
+            "correctement.\n\n"
+            f"{last_line}\n\n"
+            f"Détails complets enregistrés dans :\n{CRASH_LOG_PATH}",
+        )
+        error_root.destroy()
+    except Exception:
+        pass  # même l'affichage de l'erreur a échoué : le journal reste la seule trace
 
 
 if __name__ == "__main__":
