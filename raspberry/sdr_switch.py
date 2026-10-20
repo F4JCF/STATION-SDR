@@ -17,13 +17,16 @@ qui évite que plusieurs programmes se disputent la clé au boot.
 Doit tourner en root (il pilote systemctl). Port : SDR_SWITCH_PORT (5006).
 """
 
+import json
 import logging
 import os
 import subprocess
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from flask import Flask, jsonify
+# Bibliothèque standard uniquement : ce service tourne en root, et Flask
+# n'est souvent installé que pour l'utilisateur courant (pip --user).
 
 PORT = int(os.environ.get("SDR_SWITCH_PORT", "5006"))
 STATE_DIR = "/var/lib/sdr-switch"
@@ -44,7 +47,6 @@ LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("sdr-switch")
-app = Flask(__name__)
 _lock = threading.Lock()
 
 
@@ -140,24 +142,46 @@ def switch_to(mode: str) -> dict:
         }
 
 
-@app.get("/api/sdr/mode")
-def get_mode():
+def _mode_status() -> dict:
     mode = _read_mode()
-    return jsonify({
+    return {
         "mode": mode,
         "label": LABELS.get(mode, mode),
         "units": UNITS,
         "active": {m: any(_is_active(u) for u in us) for m, us in UNITS.items()},
-    })
+    }
 
 
-@app.post("/api/sdr/mode/<mode>")
-def set_mode(mode):
-    if mode not in CANDIDATES:
-        return jsonify({"error": f"mode inconnu : {mode}"}), 400
-    if not UNITS.get(mode):
-        return jsonify({"error": f"aucun service installé pour {LABELS.get(mode, mode)}"}), 404
-    return jsonify(switch_to(mode))
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code: int, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.rstrip("/") == "/api/sdr/mode":
+            self._send(200, _mode_status())
+        else:
+            self._send(404, {"error": "introuvable"})
+
+    def do_POST(self):
+        prefix = "/api/sdr/mode/"
+        if not self.path.startswith(prefix):
+            self._send(404, {"error": "introuvable"})
+            return
+        mode = self.path[len(prefix):].strip("/")
+        if mode not in CANDIDATES:
+            self._send(400, {"error": f"mode inconnu : {mode}"})
+        elif not UNITS.get(mode):
+            self._send(404, {"error": f"aucun service installé pour {LABELS.get(mode, mode)}"})
+        else:
+            self._send(200, switch_to(mode))
+
+    def log_message(self, fmt, *args):
+        log.info("%s - %s", self.address_string(), fmt % args)
 
 
 def _apply_boot_mode():
@@ -174,4 +198,4 @@ if __name__ == "__main__":
     # Le serveur répond tout de suite ; la bascule de démarrage se fait
     # en parallèle (elle peut prendre plusieurs secondes).
     threading.Thread(target=_apply_boot_mode, daemon=True).start()
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
