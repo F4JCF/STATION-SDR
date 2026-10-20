@@ -1264,19 +1264,49 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------------- AIS --
 
+    # Catégories d'AIS-catcher (champ "shipclass") -> (libellé, couleur),
+    # mêmes familles et couleurs proches de sa propre carte web.
+    AIS_CLASSES = {
+        2: ("Cargo", "#22c55e"),
+        6: ("Pétrolier", "#ef4444"),
+        4: ("Passagers", "#3b82f6"),
+        7: ("Grande vitesse", "#eab308"),
+        5: ("Remorqueur / spécial", "#a16207"),
+        8: ("Pêche", "#f472b6"),
+        3: ("Plaisance / classe B", "#a855f7"),
+        0: ("Autre", "#06b6d4"),
+        1: ("Autre", "#06b6d4"),
+        12: ("Aide à la navigation", "#facc15"),
+        11: ("Station de base", "#1d4ed8"),
+        13: ("SART / balise", "#dc2626"),
+        9: ("Avion SAR", "#f97316"),
+        10: ("Hélicoptère SAR", "#f97316"),
+    }
+    AIS_FILTERS = [
+        "Cargo", "Pétrolier", "Passagers", "Grande vitesse", "Remorqueur / spécial", "Pêche",
+        "Plaisance / classe B", "Autre", "Aide à la navigation", "Station de base", "SART / balise",
+        "Avion SAR", "Hélicoptère SAR",
+    ]
+    AIS_STATUS = {
+        0: "En route au moteur", 1: "Au mouillage", 2: "Non manœuvrant", 3: "Manœuvre restreinte",
+        4: "Gêné par son tirant d'eau", 5: "Amarré", 6: "Échoué", 7: "En pêche", 8: "En route à la voile",
+        14: "SART actif",
+    }
+    AIS_RINGS_NM = (5, 10, 25, 50)
+
     def _build_ais_tab(self, frame):
         outer_wrapper = tk.Frame(frame, bg=theme.BG)
         outer_wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # Même disposition que Météo / Trafic aérien : liste à gauche,
-        # carte à droite sur toute la hauteur.
-        left = tk.Frame(outer_wrapper, bg=theme.BG)
+        left = tk.Frame(outer_wrapper, bg=theme.BG, width=640)
         left.pack(side="left", fill="y", pady=(0, 6))
+        left.pack_propagate(False)
 
+        # --- Statut + compteur + lien vers la carte web d'AIS-catcher
         status_outer = theme.card(left)
-        status_outer.pack(fill="x", padx=12, pady=(8, 8))
+        status_outer.pack(fill="x", padx=12, pady=(8, 6))
         status_inner = status_outer.inner
-        status_inner.configure(padding=14)
+        status_inner.configure(padding=12)
         tk.Label(
             status_inner, text="AIS (AIS-catcher)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
         ).pack(side="left")
@@ -1285,86 +1315,349 @@ class App(tk.Tk):
         if not hasattr(self, "_info_status_pills"):
             self._info_status_pills = {}
         self._info_status_pills["ais"] = pill
+        ttk.Button(
+            status_inner, text="Carte web AIS-catcher", style="Flat.TButton",
+            command=lambda: self._open_url(
+                f"http://{self.config_data.get('pi_host', '192.168.1.229')}:{self.config_data.get('port_ais', 8100)}/"
+            ),
+        ).pack(side="right")
 
         self.ais_count_label = tk.Label(
-            left, text="Navires suivis : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
-            anchor="w", justify="left", wraplength=560,
+            left, text="Navires : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
+            anchor="w", justify="left", wraplength=610,
         )
-        self.ais_count_label.pack(anchor="w", padx=12, pady=(0, 6))
+        self.ais_count_label.pack(anchor="w", padx=12, pady=(0, 4))
 
+        # --- Recherche + filtres par catégorie
+        filt_outer = theme.card(left)
+        filt_outer.pack(fill="x", padx=12, pady=(0, 6))
+        filt = filt_outer.inner
+        filt.configure(padding=8)
+        search_row = tk.Frame(filt, bg=theme.BG_CARD)
+        search_row.pack(fill="x")
+        tk.Label(
+            search_row, text="Rechercher (nom / MMSI / indicatif) :", bg=theme.BG_CARD, fg=theme.MUTED,
+            font=theme.FONT_SUBTITLE,
+        ).pack(side="left", padx=(0, 6))
+        self.ais_search_var = tk.StringVar()
+        self.ais_search_var.trace_add("write", lambda *_a: self._repaint_ais())
+        ttk.Entry(search_row, textvariable=self.ais_search_var, width=22).pack(side="left")
+        for txt, val in (("Tout", True), ("Rien", False)):
+            ttk.Button(
+                search_row, text=txt, style="Flat.TButton",
+                command=lambda v=val: self._ais_set_all_filters(v),
+            ).pack(side="right", padx=(4, 0))
+
+        grid = tk.Frame(filt, bg=theme.BG_CARD)
+        grid.pack(fill="x", pady=(6, 0))
+        self.ais_filter_vars = {}
+        colors = {label: color for label, color in self.AIS_CLASSES.values()}
+        for i, label in enumerate(self.AIS_FILTERS):
+            var = tk.BooleanVar(value=True)
+            var.trace_add("write", lambda *_a: self._repaint_ais())
+            self.ais_filter_vars[label] = var
+            cell = tk.Frame(grid, bg=theme.BG_CARD)
+            cell.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 10), pady=1)
+            tk.Label(cell, text="●", bg=theme.BG_CARD, fg=colors[label], font=("Segoe UI", 11)).pack(side="left")
+            tk.Checkbutton(
+                cell, text=label, variable=var, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
+                activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=("Segoe UI", 9),
+                highlightthickness=0, bd=0,
+            ).pack(side="left")
+        self.ais_moving_only = tk.BooleanVar(value=False)
+        self.ais_moving_only.trace_add("write", lambda *_a: self._repaint_ais())
+        tk.Checkbutton(
+            filt, text="Navires en mouvement uniquement (> 0,5 kn)", variable=self.ais_moving_only,
+            bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+            activeforeground=theme.TEXT, font=("Segoe UI", 9), highlightthickness=0, bd=0,
+        ).pack(anchor="w", pady=(4, 0))
+
+        # --- Liste (triable par clic sur l'en-tête)
         table_outer = theme.card(left)
         table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 6))
-        columns = ("name", "mmsi", "speed", "cog", "dist", "seen")
-        self.ais_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=14)
+        columns = ("country", "name", "dist", "speed", "type", "seen")
+        self.ais_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=10)
         headings = {
-            "name": "Nom", "mmsi": "MMSI", "speed": "Vitesse (kn)",
-            "cog": "Cap (°)", "dist": "Distance (NM)", "seen": "Vu il y a",
+            "country": "Pays", "name": "Nom", "dist": "Dist (NM)", "speed": "Vit (kn)",
+            "type": "Type", "seen": "Vu il y a",
         }
-        widths = {"name": 150, "mmsi": 90, "speed": 80, "cog": 60, "dist": 90, "seen": 80}
+        widths = {"country": 50, "name": 170, "dist": 75, "speed": 65, "type": 150, "seen": 75}
         for col in columns:
-            self.ais_tree.heading(col, text=headings[col])
-            self.ais_tree.column(col, width=widths[col], minwidth=50, anchor="w" if col == "name" else "center")
+            self.ais_tree.heading(col, text=headings[col], command=lambda c=col: self._ais_sort_by(c))
+            self.ais_tree.column(col, width=widths[col], minwidth=40, anchor="w" if col in ("name", "type") else "center")
+        vsb = ttk.Scrollbar(table_outer.inner, orient="vertical", command=self.ais_tree.yview)
+        self.ais_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
         self.ais_tree.pack(fill="both", expand=True, padx=1, pady=1)
         self.ais_tree.bind("<<TreeviewSelect>>", self._on_ais_select)
+        self._ais_sort = ("dist", False)
 
+        # --- Fiche détaillée
+        detail_outer = theme.card(left)
+        detail_outer.pack(fill="x", padx=12, pady=(0, 6))
+        detail = detail_outer.inner
+        detail.configure(padding=8)
+        self.ais_detail_title = tk.Label(
+            detail, text="Cliquez un navire (liste ou carte) pour voir sa fiche.",
+            bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD, anchor="w",
+        )
+        self.ais_detail_title.pack(anchor="w")
+        fields = tk.Frame(detail, bg=theme.BG_CARD)
+        fields.pack(anchor="w", fill="x", pady=(4, 0))
+        titles = [
+            ("mmsi", "MMSI"), ("callsign", "Indicatif"), ("imo", "IMO"), ("country", "Pavillon"),
+            ("speed", "Vitesse"), ("cog", "Route (COG)"), ("heading", "Cap vrai"), ("status", "Statut"),
+            ("dist", "Distance / relèvement"), ("dims", "Dimensions"), ("draught", "Tirant d'eau"), ("seen", "Vu il y a"),
+            ("destination", "Destination"), ("eta", "ETA"), ("level", "Signal"), ("count", "Messages"),
+        ]
+        self.ais_detail_values = {}
+        for i, (key, title) in enumerate(titles):
+            r, c = divmod(i, 4)
+            cell = tk.Frame(fields, bg=theme.BG_CARD)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, 14), pady=1)
+            tk.Label(cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+            v = tk.Label(cell, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY)
+            v.pack(anchor="w")
+            self.ais_detail_values[key] = v
+
+        # --- Carte
         map_outer = theme.card(outer_wrapper)
         map_outer.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
         self.ais_map = TkinterMapView(map_outer.inner, corner_radius=0)
         self.ais_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.ais_map.set_position(lat, lon)
-        self.ais_map.set_zoom(10)
-        self._ais_positions = {}
+        self.ais_map.set_zoom(9)
+
+        self._ais_ships = []
+        self._ais_by_mmsi = {}
+        self._ais_selected = None
+        self._ais_station = DEFAULT_COORDS
+        self._ais_rings_drawn_for = None
+        self._ais_icon_cache = {}
+
+    # -- Classement / formatage
+
+    def _ais_class(self, ship):
+        return self.AIS_CLASSES.get(ship.get("shipclass"), ("Autre", "#06b6d4"))
+
+    @staticmethod
+    def _ais_name(ship):
+        return (ship.get("shipname") or "").strip() or str(ship.get("mmsi", "?"))
+
+    @staticmethod
+    def _ais_num(v):
+        return v if isinstance(v, (int, float)) else None
+
+    def _ais_set_all_filters(self, value):
+        for var in self.ais_filter_vars.values():
+            var.set(value)
+
+    def _ais_sort_by(self, col):
+        current, desc = self._ais_sort
+        self._ais_sort = (col, not desc if current == col else False)
+        self._repaint_ais()
+
+    def _ais_icon(self, color, shape, angle):
+        key = (color, shape, int(angle or 0) // 10 * 10)
+        if key in self._ais_icon_cache:
+            return self._ais_icon_cache[key]
+        size = 20
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        c = size / 2
+        if shape == "moving":
+            d.polygon([(c, 1), (size - 4, size - 3), (c, size - 7), (4, size - 3)], fill=color, outline="#0b0f17")
+            img = img.rotate(-key[2], resample=Image.BICUBIC)
+        elif shape == "diamond":
+            d.polygon([(c, 2), (size - 3, c), (c, size - 3), (3, c)], fill=color, outline="#0b0f17")
+        else:
+            d.ellipse([5, 5, size - 5, size - 5], fill=color, outline="#0b0f17")
+        photo = ImageTk.PhotoImage(img)
+        self._ais_icon_cache[key] = photo
+        return photo
+
+    def _ais_draw_rings(self):
+        """Cercles de distance (5, 10, 25, 50 NM) autour de la station, comme
+        sur la carte web d'AIS-catcher. Redessinés seulement si la position
+        de la station change."""
+        if self._ais_rings_drawn_for == self._ais_station:
+            return
+        self._ais_rings_drawn_for = self._ais_station
+        self.ais_map.delete_all_polygon()
+        lat0, lon0 = self._ais_station
+        for nm in self.AIS_RINGS_NM:
+            r_lat = nm / 60.0
+            r_lon = r_lat / max(0.1, math.cos(math.radians(lat0)))
+            pts = [
+                (lat0 + r_lat * math.sin(math.radians(a)), lon0 + r_lon * math.cos(math.radians(a)))
+                for a in range(0, 361, 6)
+            ]
+            self.ais_map.set_polygon(pts, outline_color="#3b82f6", fill_color=None, border_width=1)
+
+    # -- Données
+
+    def _render_ais(self, data, error):
+        if error:
+            self._ais_ships = []
+            if getattr(self, "_sdr_mode", None) not in (None, "ais"):
+                label = SDR_MODE_LABELS.get(self._sdr_mode, self._sdr_mode)
+                txt = f"Navires : AIS en pause — la clé SDR est sur {label}. Ouvrez cette page pour la récupérer."
+            else:
+                txt = "Navires : indisponible — AIS-catcher est-il démarré sur le Pi ?"
+            self.ais_count_label.config(text=txt)
+            if "ais" in self.tile_chips:
+                self.tile_chips["ais"].config(text="—")
+            self._repaint_ais(keep_label=True)
+            return
+
+        ships = data.get("ships", []) if isinstance(data, dict) else []
+        self._ais_ships = ships
+        self._ais_by_mmsi = {s.get("mmsi"): s for s in ships}
+        station = data.get("station") if isinstance(data, dict) else None
+        if isinstance(station, dict):
+            slat, slon = self._ais_num(station.get("lat")), self._ais_num(station.get("lon"))
+            if slat is not None and slon is not None and not (slat == 0 and slon == 0):
+                self._ais_station = (slat, slon)
+        if "ais" in self.tile_chips:
+            self.tile_chips["ais"].config(text=f"{len(ships)} navire(s)")
+        self._repaint_ais()
+        if self._ais_selected in self._ais_by_mmsi:
+            self._show_ais_detail(self._ais_by_mmsi[self._ais_selected])
+
+    def _ais_visible(self, ship):
+        label, _color = self._ais_class(ship)
+        if not self.ais_filter_vars.get(label, tk.BooleanVar(value=True)).get():
+            return False
+        if self.ais_moving_only.get() and not ((self._ais_num(ship.get("speed")) or 0) > 0.5):
+            return False
+        q = self.ais_search_var.get().strip().lower()
+        if q:
+            hay = f"{ship.get('shipname', '')} {ship.get('mmsi', '')} {ship.get('callsign', '')}".lower()
+            return q in hay
+        return True
+
+    def _repaint_ais(self, keep_label=False):
+        if not hasattr(self, "ais_tree"):
+            return
+        ships = [s for s in self._ais_ships if self._ais_visible(s)]
+        col, desc = self._ais_sort
+        def key(s):
+            if col == "name":
+                return self._ais_name(s).lower()
+            if col == "country":
+                return s.get("country") or ""
+            if col == "type":
+                return self._ais_class(s)[0]
+            field = {"dist": "distance", "speed": "speed", "seen": "last_signal"}[col]
+            v = self._ais_num(s.get(field))
+            return v if v is not None else float("inf")
+        ships.sort(key=key, reverse=desc)
+
+        if not keep_label:
+            with_pos = sum(1 for s in self._ais_ships if self._ais_num(s.get("lat")) is not None)
+            shown = f" — {len(ships)} affiché(s)" if len(ships) != len(self._ais_ships) else ""
+            self.ais_count_label.config(
+                text=f"Navires : {len(self._ais_ships)} (dont {with_pos} positionnés){shown}",
+            )
+
+        self.ais_tree.delete(*self.ais_tree.get_children())
+        for s in ships:
+            dist = self._ais_num(s.get("distance"))
+            speed = self._ais_num(s.get("speed"))
+            seen = self._ais_num(s.get("last_signal"))
+            seen_txt = "—" if seen is None else (f"{int(seen)} s" if seen < 60 else f"{int(seen // 60)} min {int(seen % 60):02d} s")
+            iid = str(s.get("mmsi"))
+            if self.ais_tree.exists(iid):
+                continue
+            self.ais_tree.insert(
+                "", "end", iid=iid,
+                values=(
+                    s.get("country") or "—", self._ais_name(s),
+                    "—" if dist is None else f"{dist:.1f}", "—" if speed is None else f"{speed:.1f}",
+                    self._ais_class(s)[0], seen_txt,
+                ),
+            )
+        if self._ais_selected is not None and self.ais_tree.exists(str(self._ais_selected)):
+            self.ais_tree.selection_set(str(self._ais_selected))
+
+        self.ais_map.delete_all_marker()
+        self._ais_draw_rings()
+        self.ais_map.set_marker(*self._ais_station, text="F4JCF", text_color="#16a34a",
+                                marker_color_circle="#14532d", marker_color_outside="#22c55e")
+        for s in ships:
+            lat, lon = self._ais_num(s.get("lat")), self._ais_num(s.get("lon"))
+            if lat is None or lon is None:
+                continue
+            label, color = self._ais_class(s)
+            moving = (self._ais_num(s.get("speed")) or 0) > 0.5
+            cls = s.get("shipclass")
+            shape = "diamond" if cls in (11, 12, 13) else ("moving" if moving else "still")
+            angle = self._ais_num(s.get("cog")) if moving else 0
+            selected = s.get("mmsi") == self._ais_selected
+            self.ais_map.set_marker(
+                lat, lon, text=self._ais_name(s) if selected else None,
+                icon=self._ais_icon(color, shape, angle), data=s.get("mmsi"),
+                command=self._on_ais_marker_click,
+            )
+
+    def _on_ais_marker_click(self, marker):
+        ship = self._ais_by_mmsi.get(marker.data)
+        if ship:
+            self._ais_selected = marker.data
+            self._show_ais_detail(ship)
+            self._repaint_ais()
 
     def _on_ais_select(self, _event=None):
         sel = self.ais_tree.selection()
         if not sel:
             return
-        pos = self._ais_positions.get(sel[0])
-        if pos:
-            self.ais_map.set_position(*pos)
-
-    def _render_ais(self, data, error):
-        for item in self.ais_tree.get_children():
-            self.ais_tree.delete(item)
-        self.ais_map.delete_all_marker()
-        self._ais_positions = {}
-
-        if error:
-            if getattr(self, "_sdr_mode", None) not in (None, "ais"):
-                label = SDR_MODE_LABELS.get(self._sdr_mode, self._sdr_mode)
-                txt = f"Navires suivis : AIS en pause — la clé SDR est sur {label}."
-            else:
-                txt = "Navires suivis : indisponible — AIS-catcher est-il installé et démarré sur le Pi ?"
-            self.ais_count_label.config(text=txt)
-            if "ais" in self.tile_chips:
-                self.tile_chips["ais"].config(text="—")
+        try:
+            mmsi = int(sel[0])
+        except ValueError:
             return
+        if mmsi == self._ais_selected:
+            return
+        ship = self._ais_by_mmsi.get(mmsi)
+        if not ship:
+            return
+        self._ais_selected = mmsi
+        self._show_ais_detail(ship)
+        lat, lon = self._ais_num(ship.get("lat")), self._ais_num(ship.get("lon"))
+        if lat is not None and lon is not None:
+            self.ais_map.set_position(lat, lon)
+        self._repaint_ais()
 
-        ships = data.get("ships", []) if isinstance(data, dict) else []
-        ships = sorted(ships, key=lambda s: s.get("last_signal", 1e9))
-        self.ais_count_label.config(text=f"Navires suivis : {len(ships)}")
-        if "ais" in self.tile_chips:
-            self.tile_chips["ais"].config(text=f"{len(ships)} navire(s)")
-
-        def fmt(v, nd=1):
-            return "—" if v is None else f"{v:.{nd}f}" if isinstance(v, (int, float)) else str(v)
-
-        for ship in ships:
-            name = (ship.get("shipname") or "").strip() or "(sans nom)"
-            seen = ship.get("last_signal")
-            seen_txt = "—" if seen is None else (f"{int(seen)} s" if seen < 120 else f"{int(seen // 60)} min")
-            iid = self.ais_tree.insert(
-                "", "end",
-                values=(
-                    name, ship.get("mmsi", "—"), fmt(ship.get("speed")), fmt(ship.get("cog"), 0),
-                    fmt(ship.get("distance")), seen_txt,
-                ),
-            )
-            lat, lon = ship.get("lat"), ship.get("lon")
-            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-                self._ais_positions[iid] = (lat, lon)
-                self.ais_map.set_marker(lat, lon, text=name if name != "(sans nom)" else str(ship.get("mmsi", "")))
+    def _show_ais_detail(self, s):
+        num = self._ais_num
+        label, _ = self._ais_class(s)
+        self.ais_detail_title.config(text=f"{self._ais_name(s)}  —  {label}")
+        def put(key, txt):
+            self.ais_detail_values[key].config(text=txt if txt not in (None, "") else "—")
+        put("mmsi", s.get("mmsi"))
+        put("callsign", (s.get("callsign") or "").strip())
+        put("imo", s.get("imo"))
+        put("country", s.get("country"))
+        put("speed", None if num(s.get("speed")) is None else f"{s['speed']:.1f} kn")
+        put("cog", None if num(s.get("cog")) is None else f"{s['cog']:.0f}°")
+        put("heading", None if num(s.get("heading")) is None else f"{s['heading']:.0f}°")
+        put("status", self.AIS_STATUS.get(s.get("status")))
+        dist, brg = num(s.get("distance")), num(s.get("bearing"))
+        put("dist", None if dist is None else f"{dist:.1f} NM" + ("" if brg is None else f" / {brg:.0f}°"))
+        dims = [num(s.get(k)) for k in ("to_bow", "to_stern", "to_port", "to_starboard")]
+        put("dims", None if None in dims else f"{dims[0] + dims[1]:.0f} × {dims[2] + dims[3]:.0f} m")
+        put("draught", None if num(s.get("draught")) is None else f"{s['draught']:.1f} m")
+        seen = num(s.get("last_signal"))
+        put("seen", None if seen is None else f"{int(seen)} s")
+        put("destination", (s.get("destination") or "").strip())
+        eta = [s.get(k) for k in ("eta_day", "eta_month", "eta_hour", "eta_minute")]
+        try:
+            eta_txt = None if None in eta else "{:02d}/{:02d} {:02d}:{:02d}".format(*(int(x) for x in eta))
+        except (TypeError, ValueError):
+            eta_txt = None
+        put("eta", eta_txt)
+        put("level", None if num(s.get("level")) is None else f"{s['level']:.1f} dB")
+        put("count", s.get("count"))
 
     # ------------------------------------------------- Pages informatives --
 
