@@ -1,7 +1,8 @@
 """STATION-SDR - Tableau de bord Windows pour le Raspberry Pi F4JCF-SDR-STATION.
 
-Interface Tkinter : bandeau d'en-tête, puces de statut global, onglets en
-carte (météo, trafic aérien, services, récepteurs SDR), rafraîchis
+Interface Tkinter : bandeau d'en-tête, puces de statut global, écran
+d'accueil en vignettes cliquables (météo, trafic aérien, APRS, Winlink,
+récepteurs SDR, services) ouvrant chacune un module dédié, rafraîchis
 périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 """
 
@@ -26,6 +27,16 @@ STATION_COORDS = {
     "LFMN": (43.6584, 7.2159),  # Nice - Côte d'Azur
 }
 DEFAULT_COORDS = (43.6045, 6.9971)  # Mougins
+
+# (clé, titre, sous-titre) des vignettes de l'écran d'accueil.
+HOME_TILES = [
+    ("weather", "Météo", "Relevé METAR local"),
+    ("aircraft", "Trafic aérien", "ADS-B / readsb"),
+    ("aprs", "APRS", "Direwolf — réception de paquets"),
+    ("winlink", "Winlink", "Messagerie radio par paquet"),
+    ("sdr", "Récepteurs SDR", "Allocation des tuners"),
+    ("services", "Services système", "Vue d'ensemble des services"),
+]
 
 
 def _kt_to_kmh(value):
@@ -109,21 +120,97 @@ class App(tk.Tk):
         self.chip_updated.pack(side="right")
 
     def _build_body(self):
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+        container = tk.Frame(self, bg=theme.BG)
+        container.pack(fill="both", expand=True, padx=20, pady=(0, 16))
 
-        self.tab_weather = self._add_tab(notebook, "Météo")
-        self.tab_aircraft = self._add_tab(notebook, "Trafic aérien (ADS-B)")
-        self.tab_services = self._add_tab(notebook, "Services")
-        self.tab_sdr = self._add_tab(notebook, "Récepteurs SDR")
+        nav = tk.Frame(container, bg=theme.BG)
+        nav.pack(fill="x", pady=(0, 10))
+        self.view_title_label = tk.Label(
+            nav, text="Accueil", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
+        )
+        self.view_title_label.pack(side="left")
+        self.back_button = ttk.Button(
+            nav, text="← Accueil", style="Flat.TButton", command=self.show_home,
+        )
+        # Pas encore affiché : on est sur l'accueil au démarrage.
 
-        self._build_weather_tab(self.tab_weather)
-        self._build_aircraft_table(self.tab_aircraft)
+        self.page_area = tk.Frame(container, bg=theme.BG)
+        self.page_area.pack(fill="both", expand=True)
 
-    def _add_tab(self, notebook, label):
-        frame = ttk.Frame(notebook, style="TFrame")
-        notebook.add(frame, text=label)
-        return frame
+        self.home_frame = tk.Frame(self.page_area, bg=theme.BG)
+        self.pages = {
+            "weather": tk.Frame(self.page_area, bg=theme.BG),
+            "aircraft": tk.Frame(self.page_area, bg=theme.BG),
+            "aprs": tk.Frame(self.page_area, bg=theme.BG),
+            "winlink": tk.Frame(self.page_area, bg=theme.BG),
+            "services": tk.Frame(self.page_area, bg=theme.BG),
+            "sdr": tk.Frame(self.page_area, bg=theme.BG),
+        }
+
+        self._build_home_tiles()
+        self._build_weather_tab(self.pages["weather"])
+        self._build_aircraft_table(self.pages["aircraft"])
+        self._build_aprs_tab(self.pages["aprs"])
+        self._build_winlink_tab(self.pages["winlink"])
+
+        self.show_home()
+
+    def _build_home_tiles(self):
+        grid = tk.Frame(self.home_frame, bg=theme.BG)
+        grid.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tile_chips = {}
+        columns = 3
+        for i, (key, title, subtitle) in enumerate(HOME_TILES):
+            r, c = divmod(i, columns)
+            grid.grid_columnconfigure(c, weight=1)
+            outer = theme.card(grid)
+            outer.grid(row=r, column=c, sticky="nsew", padx=10, pady=10)
+            inner = outer.inner
+            inner.configure(padding=18)
+
+            title_label = tk.Label(
+                inner, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+            )
+            title_label.pack(anchor="w")
+            subtitle_label = tk.Label(
+                inner, text=subtitle, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                wraplength=220, justify="left",
+            )
+            subtitle_label.pack(anchor="w", pady=(4, 10))
+            chip_label = theme.chip(inner, "—")
+            chip_label.pack(anchor="w")
+            self.tile_chips[key] = chip_label
+
+            for widget in (outer, inner, title_label, subtitle_label, chip_label):
+                widget.bind("<Button-1>", lambda _e, k=key: self.show_page(k))
+                try:
+                    widget.configure(cursor="hand2")
+                except tk.TclError:
+                    pass
+
+    def show_home(self):
+        self._show_view(None)
+
+    def show_page(self, key):
+        self._show_view(key)
+
+    def _show_view(self, key):
+        self.home_frame.pack_forget()
+        for page in self.pages.values():
+            page.pack_forget()
+
+        if key is None:
+            self.home_frame.pack(fill="both", expand=True)
+            self.view_title_label.config(text="Accueil")
+            self.back_button.pack_forget()
+        else:
+            self.pages[key].pack(fill="both", expand=True)
+            titles = {k: t for k, t, _ in HOME_TILES}
+            self.view_title_label.config(text=titles.get(key, key))
+            self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
+
+        self._current_view = key
 
     def _clear(self, frame):
         for child in frame.winfo_children():
@@ -270,6 +357,10 @@ class App(tk.Tk):
 
         self.weather_metar_label.config(text=data.get("metar_brut", ""))
 
+        if "weather" in self.tile_chips:
+            temp = data.get("temperature_c")
+            self.tile_chips["weather"].config(text=f"{_fmt(temp)} °C" if temp is not None else "—")
+
         if station != self._weather_map_station:
             lat, lon = STATION_COORDS.get(station, DEFAULT_COORDS)
             self.weather_map.set_position(lat, lon)
@@ -315,10 +406,14 @@ class App(tk.Tk):
             for item in self.aircraft_tree.get_children():
                 self.aircraft_tree.delete(item)
             self.aircraft_map.delete_all_marker()
+            if "aircraft" in self.tile_chips:
+                self.tile_chips["aircraft"].config(text="—")
             return
 
         aircraft = data.get("aircraft", [])
         self.aircraft_count_label.config(text=f"Avions détectés : {len(aircraft)}")
+        if "aircraft" in self.tile_chips:
+            self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)")
         for item in self.aircraft_tree.get_children():
             self.aircraft_tree.delete(item)
         self.aircraft_map.delete_all_marker()
@@ -336,10 +431,71 @@ class App(tk.Tk):
                 alt = ac.get("alt_baro", "—")
                 self.aircraft_map.set_marker(lat, lon, text=f"{flight} · {alt} ft")
 
+    # ----------------------------------------------------------- APRS --
+
+    def _build_aprs_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        outer = theme.card(wrapper)
+        outer.pack(fill="x", padx=12, pady=12)
+        inner = outer.inner
+        inner.configure(padding=18)
+
+        tk.Label(
+            inner, text="APRS (Direwolf)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+        ).pack(anchor="w")
+        self.aprs_badge = theme.pill(inner, "INCONNU", theme.MUTED)
+        self.aprs_badge.pack(anchor="w", pady=(10, 14))
+
+        tk.Label(
+            inner,
+            text="Aucune API de décodage des paquets n'est exposée pour l'instant sur le\n"
+                 "Raspberry : ce module affiche l'état du service Direwolf (le TNC logiciel\n"
+                 "qui décode l'APRS reçu par SDR). Pour afficher ici les stations et les\n"
+                 "paquets reçus, il faudra exposer une API dédiée sur le Pi.",
+            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left",
+        ).pack(anchor="w")
+
+        ttk.Button(
+            inner, text="Redémarrer Direwolf", style="Flat.TButton",
+            command=lambda: self._restart_service("direwolf"),
+        ).pack(anchor="w", pady=(14, 0))
+
+    # --------------------------------------------------------- Winlink --
+
+    def _build_winlink_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        outer = theme.card(wrapper)
+        outer.pack(fill="x", padx=12, pady=12)
+        inner = outer.inner
+        inner.configure(padding=18)
+
+        tk.Label(
+            inner, text="Winlink", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+        ).pack(anchor="w")
+        theme.pill(inner, "NON CONFIGURÉ", theme.MUTED).pack(anchor="w", pady=(10, 14))
+
+        tk.Label(
+            inner,
+            text="Aucune passerelle Winlink (par ex. Pat Winlink) n'est installée sur\n"
+                 "F4JCF-SDR-STATION pour l'instant. Winlink permet d'échanger des emails\n"
+                 "par radio (paquet, VARA, Ardop) via un réseau de stations relais.\n\n"
+                 "Pour l'intégrer ici, il faudrait installer un client Winlink sur le\n"
+                 "Raspberry et exposer son état (connecté, file d'attente, dernière\n"
+                 "synchronisation) via une petite API, comme pour les autres services.",
+            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left",
+        ).pack(anchor="w")
+
+        if "winlink" in self.tile_chips:
+            self.tile_chips["winlink"].config(text="Non configuré")
+
     # ---------------------------------------------------------- Services --
 
     def _render_services(self, data, error):
-        frame = self.tab_services
+        frame = self.pages["services"]
         if error:
             self._render_error(frame, error)
             return
@@ -349,6 +505,17 @@ class App(tk.Tk):
         total = len(data)
         running = sum(1 for v in data.values() if v.get("running"))
         self.chip_services.config(text=f"Services : {running}/{total}")
+        if "services" in self.tile_chips:
+            self.tile_chips["services"].config(text=f"{running}/{total} actifs")
+
+        direwolf = data.get("direwolf")
+        if direwolf is not None:
+            is_running = bool(direwolf.get("running"))
+            text = "EN COURS" if is_running else "ARRÊTÉ"
+            color = theme.GREEN if is_running else theme.RED
+            self.aprs_badge.config(text=f"  {text}  ", bg=color)
+            if "aprs" in self.tile_chips:
+                self.tile_chips["aprs"].config(text=text)
 
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
@@ -399,7 +566,7 @@ class App(tk.Tk):
     # ---------------------------------------------------------------- SDR --
 
     def _render_sdr(self, data, error):
-        frame = self.tab_sdr
+        frame = self.pages["sdr"]
         if error:
             self._render_error(frame, error)
             return
@@ -407,6 +574,8 @@ class App(tk.Tk):
 
         in_use = sum(1 for v in data.values() if v)
         self.chip_sdr.config(text=f"SDR : {in_use}/{len(data)} occupé(s)")
+        if "sdr" in self.tile_chips:
+            self.tile_chips["sdr"].config(text=f"{in_use}/{len(data)} occupé(s)")
 
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
