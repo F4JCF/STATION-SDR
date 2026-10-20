@@ -8,6 +8,7 @@ périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 
 import io
 import math
+import re
 import os
 import sys
 import tempfile
@@ -87,10 +88,11 @@ HOME_TILES = [
     ("aprs", "APRS", "Direwolf — réception de paquets"),
     ("ais", "AIS", "Trafic maritime"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
-    ("sdr", "Récepteurs SDR", "Allocation des tuners"),
+    ("sdr", "Clé SDR", "Pilotage et partage automatique"),
     ("svxlink", "SvxLink", "Relais vocal / Echolink"),
     ("openwebrx", "OpenWebRX", "Réception SDR (ouvre le navigateur)"),
     ("services", "Services système", "Vue d'ensemble des services"),
+    ("health", "Santé du Pi", "Alimentation, température, ressources"),
 ]
 
 # Module -> mode de la clé SDR unique (sdr_switch.py sur le Pi). Ouvrir
@@ -286,6 +288,17 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
             [pt(0.14, 0.45), pt(0.28, 0.28), pt(0.40, 0.54), pt(0.54, 0.24), pt(0.68, 0.50), pt(0.86, 0.38)],
             fill=color, width=max(1, lw - 1),
         )
+    elif key == "health":
+        # Cœur + tracé d'électrocardiogramme
+        d.polygon(
+            [pt(0.5, 0.88), pt(0.12, 0.50), pt(0.10, 0.30), pt(0.22, 0.14), pt(0.38, 0.14), pt(0.5, 0.28),
+             pt(0.62, 0.14), pt(0.78, 0.14), pt(0.90, 0.30), pt(0.88, 0.50)],
+            outline=color, width=lw,
+        )
+        d.line(
+            [pt(0.18, 0.50), pt(0.36, 0.50), pt(0.44, 0.34), pt(0.54, 0.66), pt(0.62, 0.50), pt(0.82, 0.50)],
+            fill=color, width=max(1, lw - 1),
+        )
     elif key == "services":
         teeth = 8
         outer_r, inner_r, hole_r = size * 0.42, size * 0.30, size * 0.14
@@ -316,6 +329,43 @@ def _find_service(data: dict, *name_fragments: str):
         if any(f in key_l or f in label for f in fragments):
             return info
     return None
+
+
+class _TileChip:
+    """Pastille d'une vignette d'accueil. Les modules qui partagent la clé
+    SDR affichent « En pause » quand la clé est ailleurs, et la vignette du
+    module qui détient la clé est encadrée de la couleur d'accent ; le texte
+    réel envoyé par chaque page est conservé et réaffiché dès que le
+    module reprend la clé."""
+
+    def __init__(self, app, key, label, frame):
+        self.app, self.key, self.label, self.frame = app, key, label, frame
+        self.text = "—"
+
+    def config(self, text=None, **kwargs):
+        if text is not None:
+            self.text = text
+        if kwargs:
+            self.label.config(**kwargs)
+        self.refresh()
+
+    configure = config
+
+    def refresh(self):
+        mode = MODULE_SDR_MODE.get(self.key)
+        current = getattr(self.app, "_sdr_mode", None)
+        if mode and current and mode != current:
+            self.label.config(
+                text=f" En pause · clé sur {SDR_MODE_LABELS.get(current, current)} ", fg=theme.MUTED,
+                bg=theme.BG_CARD_ALT,
+            )
+            self.frame.config(bg=theme.BORDER)
+        elif mode and current == mode:
+            self.label.config(text=f" ● {self.text} ", fg="#1a1200", bg=theme.ACCENT)
+            self.frame.config(bg=theme.ACCENT)
+        else:
+            self.label.config(text=f" {self.text} ", fg=theme.TEXT, bg=theme.BG_CARD_ALT)
+            self.frame.config(bg=theme.BORDER)
 
 
 class App(tk.Tk):
@@ -415,6 +465,9 @@ class App(tk.Tk):
         self.chip_services.pack(side="left", padx=8)
         self.chip_sdr = theme.chip(strip, "SDR : —")
         self.chip_sdr.pack(side="left", padx=8)
+        self.chip_health = theme.chip(strip, "Pi : —")
+        self.chip_health.pack(side="left", padx=8)
+        self.chip_health.bind("<Button-1>", lambda _e: self.show_page("health"))
         self.chip_updated = theme.chip(strip, "Maj : —")
         self.chip_updated.pack(side="right")
 
@@ -460,6 +513,8 @@ class App(tk.Tk):
         )
         self._build_ais_tab(self.pages["ais"])
         self._build_svxlink_tab(self.pages["svxlink"])
+        self._build_sdr_tab(self.pages["sdr"])
+        self._build_health_tab(self.pages["health"])
 
         self.show_home()
 
@@ -468,7 +523,8 @@ class App(tk.Tk):
         grid.pack(fill="both", expand=True, padx=4, pady=4)
 
         self.tile_chips = {}
-        columns = 3
+        columns = 5
+        self.tile_frames = {}
         for i, (key, title, subtitle) in enumerate(HOME_TILES):
             r, c = divmod(i, columns)
             grid.grid_columnconfigure(c, weight=1)
@@ -494,7 +550,8 @@ class App(tk.Tk):
             subtitle_label.pack(anchor="w", pady=(4, 10))
             chip_label = theme.chip(inner, "—")
             chip_label.pack(anchor="w")
-            self.tile_chips[key] = chip_label
+            self.tile_chips[key] = _TileChip(self, key, chip_label, outer)
+            self.tile_frames[key] = outer
 
             for widget in (outer, inner, header_row, icon_label, title_label, subtitle_label, chip_label):
                 widget.bind("<Button-1>", lambda _e, k=key: self.show_page(k))
@@ -553,6 +610,7 @@ class App(tk.Tk):
             if error is None:
                 self._sdr_mode = mode
                 self.chip_sdr.config(text=f"Clé SDR : {label}")
+                self._refresh_all_tiles()
             else:
                 self.chip_sdr.config(text="Clé SDR : bascule indisponible")
             if then:
@@ -613,7 +671,9 @@ class App(tk.Tk):
         self._fetch(lambda: api_client.get_weather(host, cfg["port_weather"]), self._render_weather)
         self._fetch(lambda: api_client.get_aircraft(host, cfg["port_adsb"]), self._render_aircraft)
         self._fetch(lambda: api_client.get_services_status(host, cfg["port_services"]), self._render_services)
-        self._fetch(lambda: api_client.get_sdr_status(host, cfg["port_sdr"]), self._render_sdr)
+        self._fetch(
+            lambda: api_client.get_system_health(host, cfg.get("port_sdr_switch", 5006)), self._render_health,
+        )
         self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
         self._fetch(lambda: api_client.get_ais_ships(host, cfg.get("port_ais", 8100)), self._render_ais)
         self._fetch(
@@ -1342,12 +1402,12 @@ class App(tk.Tk):
         search_row = tk.Frame(filt, bg=theme.BG_CARD)
         search_row.pack(fill="x")
         tk.Label(
-            search_row, text="Rechercher (nom / MMSI / indicatif) :", bg=theme.BG_CARD, fg=theme.MUTED,
+            search_row, text="Rechercher :", bg=theme.BG_CARD, fg=theme.MUTED,
             font=theme.FONT_SUBTITLE,
         ).pack(side="left", padx=(0, 6))
         self.ais_search_var = tk.StringVar()
         self.ais_search_var.trace_add("write", lambda *_a: self._repaint_ais())
-        ttk.Entry(search_row, textvariable=self.ais_search_var, width=22).pack(side="left")
+        ttk.Entry(search_row, textvariable=self.ais_search_var, width=14).pack(side="left")
         for txt, val in (("Tout", True), ("Rien", False)):
             ttk.Button(
                 search_row, text=txt, style="Flat.TButton",
@@ -1382,7 +1442,7 @@ class App(tk.Tk):
         table_outer = theme.card(left)
         table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         columns = ("country", "name", "dist", "speed", "type", "seen")
-        self.ais_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=10)
+        self.ais_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=7)
         headings = {
             "country": "Pays", "name": "Nom", "dist": "Dist (NM)", "speed": "Vit (kn)",
             "type": "Type", "seen": "Vu il y a",
@@ -2013,48 +2073,408 @@ class App(tk.Tk):
     # ---------------------------------------------------------------- SDR --
 
     def _render_sdr_mode(self, data, error):
-        """Mémorise le module qui détient actuellement la clé, pour ne pas
-        rebasculer inutilement quand on rouvre la même page."""
-        if error or getattr(self, "_sdr_switching", False):
+        """Mémorise le module qui détient la clé (pour ne pas rebasculer
+        inutilement) et met à jour la page de pilotage et les vignettes."""
+        if error:
+            self._sdr_switch_data = None
+            if hasattr(self, "sdr_mode_value"):
+                self.sdr_mode_value.config(text="Service de bascule injoignable", fg=theme.RED)
+            return
+        self._sdr_switch_data = data
+        if getattr(self, "_sdr_switching", False):
             return
         mode = data.get("mode")
         if mode:
             self._sdr_mode = mode
             self.chip_sdr.config(text=f"Clé SDR : {SDR_MODE_LABELS.get(mode, mode)}")
+        self._refresh_all_tiles()
+        self._render_sdr_control(data)
 
     def _render_sdr(self, data, error):
-        frame = self.pages["sdr"]
-        if error:
-            self._render_error(frame, error)
-            return
-        self._clear(frame)
+        """Ancien gestionnaire de tuners (port 5002) : remplacé par la page
+        de pilotage de la clé unique, conservé pour compatibilité."""
+        return
 
-        in_use = sum(1 for v in data.values() if v)
-        if getattr(self, "_sdr_mode", None):
-            self.chip_sdr.config(text=f"Clé SDR : {SDR_MODE_LABELS.get(self._sdr_mode, self._sdr_mode)}")
-        elif not getattr(self, "_sdr_switching", False):
-            self.chip_sdr.config(text=f"SDR : {in_use}/{len(data)} occupé(s)")
-        if "sdr" in self.tile_chips:
-            self.tile_chips["sdr"].config(text=f"{in_use}/{len(data)} occupé(s)")
-
+    def _build_sdr_tab(self, frame):
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
-        grid = tk.Frame(wrapper, bg=theme.BG)
-        grid.pack(fill="both", expand=True, padx=8, pady=8)
+        # --- Module actif + boutons
+        top_outer = theme.card(wrapper)
+        top_outer.pack(fill="x", padx=12, pady=(8, 8))
+        top = top_outer.inner
+        top.configure(padding=16)
+        tk.Label(top, text="La clé SDR est sur :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(anchor="w")
+        self.sdr_mode_value = tk.Label(top, text="—", bg=theme.BG_CARD, fg=theme.ACCENT, font=("Segoe UI", 22, "bold"))
+        self.sdr_mode_value.pack(anchor="w", pady=(2, 2))
+        self.sdr_mode_detail = tk.Label(top, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY)
+        self.sdr_mode_detail.pack(anchor="w", pady=(0, 10))
+        btns = tk.Frame(top, bg=theme.BG_CARD)
+        btns.pack(anchor="w")
+        tk.Label(btns, text="Donner la clé à :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left", padx=(0, 10))
+        self.sdr_mode_buttons = {}
+        for mode in ("adsb", "ais", "aprs", "openwebrx"):
+            b = tk.Button(
+                btns, text=SDR_MODE_LABELS[mode], font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
+                bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT, activeforeground="#1a1200",
+                padx=16, pady=6, cursor="hand2", command=lambda m=mode: self._switch_sdr(m),
+            )
+            b.pack(side="left", padx=4)
+            self.sdr_mode_buttons[mode] = b
 
-        names = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "sdr": "Récepteur SDR"}
-        for i, (key, used) in enumerate(sorted(data.items())):
+        # --- Planning
+        plan_outer = theme.card(wrapper)
+        plan_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        plan = plan_outer.inner
+        plan.configure(padding=16)
+        tk.Label(plan, text="Partage automatique de la clé", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
+        tk.Label(
+            plan, text=(
+                "Manuel : la clé reste sur le module choisi.  Rotation : les modules se succèdent en boucle.  "
+                "Planning : un module par créneau horaire.\nOuvrir une page dans l'appli prend la clé et met le "
+                "partage automatique en pause pendant la durée indiquée ci-dessous."
+            ),
+            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+
+        self.sdr_sched_type = tk.StringVar(value="manual")
+        type_row = tk.Frame(plan, bg=theme.BG_CARD)
+        type_row.pack(anchor="w")
+        for val, txt in (("manual", "Manuel"), ("rotation", "Rotation"), ("planning", "Planning horaire")):
+            tk.Radiobutton(
+                type_row, text=txt, value=val, variable=self.sdr_sched_type, bg=theme.BG_CARD, fg=theme.TEXT,
+                selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD, activeforeground=theme.TEXT,
+                font=theme.FONT_BODY, highlightthickness=0, command=self._sdr_sched_show,
+            ).pack(side="left", padx=(0, 16))
+
+        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "openwebrx")]
+        self._sdr_label_to_mode = {v: k for k, v in SDR_MODE_LABELS.items()}
+
+        editors = tk.Frame(plan, bg=theme.BG_CARD)
+        editors.pack(anchor="w", fill="x", pady=(10, 0))
+
+        self.sdr_rot_frame = tk.Frame(editors, bg=theme.BG_CARD)
+        tk.Label(self.sdr_rot_frame, text="Ordre de passage (module · durée en minutes) :", bg=theme.BG_CARD,
+                 fg=theme.TEXT, font=theme.FONT_BODY).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
+        self.sdr_rot_rows = []
+        for i in range(6):
+            mv, nv = tk.StringVar(value=""), tk.StringVar(value="")
+            tk.Label(self.sdr_rot_frame, text=f"{i + 1}.", bg=theme.BG_CARD, fg=theme.MUTED,
+                     font=theme.FONT_BODY).grid(row=i + 1, column=0, sticky="e", padx=(0, 6))
+            ttk.Combobox(self.sdr_rot_frame, textvariable=mv, values=[""] + mode_names, width=12,
+                         state="readonly").grid(row=i + 1, column=1, pady=2)
+            ttk.Spinbox(self.sdr_rot_frame, textvariable=nv, from_=1, to=1440, width=6).grid(row=i + 1, column=2, padx=6)
+            tk.Label(self.sdr_rot_frame, text="min", bg=theme.BG_CARD, fg=theme.MUTED,
+                     font=theme.FONT_SUBTITLE).grid(row=i + 1, column=3, sticky="w")
+            self.sdr_rot_rows.append((mv, nv))
+
+        self.sdr_plan_frame = tk.Frame(editors, bg=theme.BG_CARD)
+        tk.Label(self.sdr_plan_frame, text="À partir de (HH:MM) · module :", bg=theme.BG_CARD,
+                 fg=theme.TEXT, font=theme.FONT_BODY).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        self.sdr_plan_rows = []
+        for i in range(6):
+            sv, mv = tk.StringVar(value=""), tk.StringVar(value="")
+            tk.Label(self.sdr_plan_frame, text=f"{i + 1}.", bg=theme.BG_CARD, fg=theme.MUTED,
+                     font=theme.FONT_BODY).grid(row=i + 1, column=0, sticky="e", padx=(0, 6))
+            ttk.Entry(self.sdr_plan_frame, textvariable=sv, width=7).grid(row=i + 1, column=1, pady=2)
+            ttk.Combobox(self.sdr_plan_frame, textvariable=mv, values=[""] + mode_names, width=12,
+                         state="readonly").grid(row=i + 1, column=2, padx=6)
+            self.sdr_plan_rows.append((sv, mv))
+
+        bottom = tk.Frame(plan, bg=theme.BG_CARD)
+        bottom.pack(anchor="w", fill="x", pady=(12, 0))
+        tk.Label(bottom, text="Pause après une bascule manuelle :", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_BODY).pack(side="left")
+        self.sdr_hold_var = tk.StringVar(value="15")
+        ttk.Spinbox(bottom, textvariable=self.sdr_hold_var, from_=0, to=240, width=5).pack(side="left", padx=6)
+        tk.Label(bottom, text="min", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left")
+        ttk.Button(bottom, text="Enregistrer", style="Accent.TButton", command=self._sdr_save_schedule).pack(side="left", padx=(20, 0))
+        self.sdr_sched_status = tk.Label(bottom, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.sdr_sched_status.pack(side="left", padx=(12, 0))
+
+        self._sdr_sched_loaded = False
+        self._sdr_sched_show()
+
+    def _sdr_sched_show(self):
+        self.sdr_rot_frame.pack_forget()
+        self.sdr_plan_frame.pack_forget()
+        t = self.sdr_sched_type.get()
+        if t == "rotation":
+            self.sdr_rot_frame.pack(anchor="w")
+        elif t == "planning":
+            self.sdr_plan_frame.pack(anchor="w")
+
+    def _sdr_fill_schedule(self, sched):
+        self.sdr_sched_type.set(sched.get("type", "manual"))
+        rot = sched.get("rotation") or []
+        for i, (mv, nv) in enumerate(self.sdr_rot_rows):
+            if i < len(rot):
+                mv.set(SDR_MODE_LABELS.get(rot[i][0], rot[i][0]))
+                nv.set(str(rot[i][1]))
+            else:
+                mv.set("")
+                nv.set("")
+        plan = sched.get("planning") or []
+        for i, (sv, mv) in enumerate(self.sdr_plan_rows):
+            if i < len(plan):
+                sv.set(plan[i].get("start", ""))
+                mv.set(SDR_MODE_LABELS.get(plan[i].get("mode"), plan[i].get("mode", "")))
+            else:
+                sv.set("")
+                mv.set("")
+        self.sdr_hold_var.set(str(sched.get("hold_minutes", 15)))
+        self._sdr_sched_show()
+
+    def _sdr_save_schedule(self):
+        rotation = []
+        for mv, nv in self.sdr_rot_rows:
+            mode = self._sdr_label_to_mode.get(mv.get())
+            try:
+                minutes = int(nv.get())
+            except ValueError:
+                continue
+            if mode:
+                rotation.append([mode, minutes])
+        planning = []
+        for sv, mv in self.sdr_plan_rows:
+            mode = self._sdr_label_to_mode.get(mv.get())
+            if mode and re.match(r"^\d{1,2}:\d{2}$", sv.get().strip()):
+                planning.append({"start": sv.get().strip(), "mode": mode})
+        t = self.sdr_sched_type.get()
+        if t == "rotation" and not rotation:
+            messagebox.showwarning("Rotation", "Indiquez au moins un module et sa durée.")
+            return
+        if t == "planning" and not planning:
+            messagebox.showwarning("Planning", "Indiquez au moins un créneau (heure HH:MM et module).")
+            return
+        try:
+            hold = int(self.sdr_hold_var.get())
+        except ValueError:
+            hold = 15
+        payload = {"type": t, "hold_minutes": hold}
+        if rotation:
+            payload["rotation"] = rotation
+        if planning:
+            payload["planning"] = planning
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_sdr_switch", 5006)
+        self.sdr_sched_status.config(text="Enregistrement…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                data = api_client.set_sdr_schedule(host, port, payload)
+                err = None
+            except Exception as exc:
+                data, err = None, str(exc)
+            self.after(0, done, data, err)
+
+        def done(data, err):
+            if err:
+                self.sdr_sched_status.config(
+                    text="Échec : le service de bascule du Pi est-il à jour ?", fg=theme.RED,
+                )
+                return
+            self.sdr_sched_status.config(text=f"Enregistré à {time.strftime('%H:%M:%S')}", fg=theme.GREEN)
+            self._sdr_sched_loaded = False
+            self._render_sdr_mode(data, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_sdr_control(self, data):
+        if not hasattr(self, "sdr_mode_value"):
+            return
+        mode = data.get("mode")
+        active = (data.get("active") or {}).get(mode)
+        self.sdr_mode_value.config(
+            text=SDR_MODE_LABELS.get(mode, mode or "—"), fg=theme.ACCENT if active else theme.ORANGE,
+        )
+        sched = data.get("schedule") or {}
+        parts = ["service en marche" if active else "service arrêté ou en échec (clé débranchée ?)"]
+        names = {"manual": "manuel", "rotation": "rotation", "planning": "planning horaire"}
+        parts.append(f"partage : {names.get(sched.get('type'), '—')}")
+        hold = data.get("hold_until")
+        if hold and hold > time.time():
+            parts.append(f"pause jusqu'à {time.strftime('%H:%M', time.localtime(hold))}")
+        nxt = data.get("next_change")
+        if nxt and sched.get("type") != "manual":
+            parts.append(f"prochain changement vers {time.strftime('%H:%M', time.localtime(nxt))}")
+        self.sdr_mode_detail.config(text="   ·   ".join(parts))
+        installed = data.get("units") or {}
+        for m, b in self.sdr_mode_buttons.items():
+            if not installed.get(m):
+                b.config(state="disabled", bg=theme.BG_CARD_ALT, fg=theme.MUTED, text=f"{SDR_MODE_LABELS[m]} (absent)")
+            elif m == mode:
+                b.config(state="normal", bg=theme.ACCENT, fg="#1a1200", text=SDR_MODE_LABELS[m])
+            else:
+                b.config(state="normal", bg=theme.BG_CARD_ALT, fg=theme.TEXT, text=SDR_MODE_LABELS[m])
+        if not self._sdr_sched_loaded and sched:
+            self._sdr_fill_schedule(sched)
+            self._sdr_sched_loaded = True
+        if "sdr" in self.tile_chips:
+            self.tile_chips["sdr"].config(text=f"Clé sur {SDR_MODE_LABELS.get(mode, mode)} · {names.get(sched.get('type'), '—')}")
+
+    # ---------------------------------------------------- Vignettes accueil --
+
+    def _refresh_all_tiles(self):
+        for chip in getattr(self, "tile_chips", {}).values():
+            if isinstance(chip, _TileChip):
+                chip.refresh()
+
+    # ------------------------------------------------------------- Santé --
+
+    def _build_health_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        power_outer = theme.card(wrapper)
+        power_outer.pack(fill="x", padx=12, pady=(8, 8))
+        p = power_outer.inner
+        p.configure(padding=16)
+        tk.Label(p, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.health_power_value = tk.Label(p, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 20, "bold"))
+        self.health_power_value.pack(anchor="w", pady=(4, 2))
+        self.health_power_detail = tk.Label(
+            p, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left", wraplength=1200,
+        )
+        self.health_power_detail.pack(anchor="w")
+
+        grid = tk.Frame(wrapper, bg=theme.BG)
+        grid.pack(fill="x", padx=6)
+        self.health_tiles = {}
+        specs = [
+            ("temp", "TEMPÉRATURE CPU"), ("load", "CHARGE CPU"), ("mem", "MÉMOIRE"), ("disk", "DISQUE"),
+            ("uptime", "EN MARCHE DEPUIS"), ("sdr", "CLÉS SDR DÉTECTÉES"),
+        ]
+        for i, (key, title) in enumerate(specs):
+            r, c = divmod(i, 3)
+            grid.grid_columnconfigure(c, weight=1, uniform="h")
             outer = theme.card(grid)
-            outer.grid(row=i // 2, column=i % 2, sticky="nsew", padx=10, pady=10)
-            grid.grid_columnconfigure(i % 2, weight=1)
+            outer.grid(row=r, column=c, sticky="nsew", padx=6, pady=(0, 8))
             inner = outer.inner
-            inner.configure(padding=16)
-            tk.Label(
-                inner, text=names.get(key, key), bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
-            ).pack(anchor="w")
-            badge = theme.pill(inner, "OCCUPÉ" if used else "LIBRE", theme.ORANGE if used else theme.GREEN)
-            badge.pack(anchor="w", pady=(10, 0))
+            inner.configure(padding=14)
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+            v = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 18, "bold"))
+            v.pack(anchor="w", pady=(4, 0))
+            s = tk.Label(inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+            s.pack(anchor="w")
+            self.health_tiles[key] = (v, s)
+
+        self.health_sys_label = tk.Label(wrapper, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.health_sys_label.pack(anchor="w", padx=14, pady=(4, 0))
+
+    @staticmethod
+    def _fmt_bytes(n):
+        if n is None:
+            return "—"
+        for unit in ("o", "Ko", "Mo", "Go", "To"):
+            if n < 1024 or unit == "To":
+                return f"{n:.1f} {unit}" if unit != "o" else f"{n} o"
+            n /= 1024
+
+    def _render_health(self, data, error):
+        if not hasattr(self, "health_tiles"):
+            return
+        if error:
+            self.chip_health.config(text="Pi : —", bg=theme.BG_CARD_ALT, fg=theme.TEXT)
+            self.health_power_value.config(text="Indisponible", fg=theme.MUTED)
+            self.health_power_detail.config(
+                text="Le service de bascule du Pi (sdr-switch, port 5006) ne répond pas ou n'est pas à jour.",
+            )
+            if "health" in self.tile_chips:
+                self.tile_chips["health"].config(text="—")
+            return
+
+        th = data.get("throttled") or {}
+        temp = data.get("cpu_temp_c")
+        if th.get("under_voltage_now"):
+            power_txt, power_col = "SOUS-TENSION EN COURS", theme.RED
+            detail = ("Le Pi manque de courant en ce moment : les clés USB (SDR) peuvent décrocher à tout instant. "
+                      "Solution : hub USB alimenté pour la clé SDR et/ou alimentation officielle 5,1 V / 2,5 A "
+                      "avec un câble court.")
+        elif th.get("under_voltage_occurred"):
+            power_txt, power_col = "Sous-tension depuis le démarrage", theme.ORANGE
+            detail = ("La tension est correcte maintenant, mais elle a chuté au moins une fois depuis le dernier "
+                      "démarrage du Pi (le compteur ne se remet à zéro qu'au redémarrage).")
+        elif th:
+            power_txt, power_col = "Correcte", theme.GREEN
+            detail = "Aucune sous-tension depuis le dernier démarrage."
+        else:
+            power_txt, power_col = "Inconnue", theme.MUTED
+            detail = "vcgencmd indisponible sur le Pi."
+        extras = []
+        if th.get("throttled_now"):
+            extras.append("processeur bridé en ce moment")
+        elif th.get("throttled_occurred"):
+            extras.append("processeur bridé au moins une fois")
+        if th.get("temp_limit_now"):
+            extras.append("limite de température atteinte")
+        if extras:
+            detail += "   ·   " + ", ".join(extras).capitalize() + "."
+        if data.get("throttled_raw"):
+            detail += f"   (code {data['throttled_raw']})"
+        self.health_power_value.config(text=power_txt, fg=power_col)
+        self.health_power_detail.config(text=detail)
+
+        v, s = self.health_tiles["temp"]
+        if temp is None:
+            v.config(text="—", fg=theme.MUTED)
+        else:
+            v.config(text=f"{temp:.1f} °C", fg=theme.RED if temp >= 80 else theme.ORANGE if temp >= 70 else theme.GREEN)
+        s.config(text="bridage à partir de 80 °C" if temp is not None else "")
+
+        v, s = self.health_tiles["load"]
+        load, ncpu = data.get("load"), data.get("cpu_count") or 1
+        if load:
+            pct = load[0] / ncpu * 100
+            v.config(text=f"{pct:.0f} %", fg=theme.RED if pct >= 90 else theme.ORANGE if pct >= 70 else theme.TEXT)
+            s.config(text=f"moyenne 1 / 5 / 15 min : {load[0]} / {load[1]} / {load[2]} ({ncpu} cœurs)")
+
+        v, s = self.health_tiles["mem"]
+        tot, av = data.get("mem_total"), data.get("mem_available")
+        if tot and av is not None:
+            pct = (tot - av) / tot * 100
+            v.config(text=f"{pct:.0f} % utilisée", fg=theme.ORANGE if pct >= 85 else theme.TEXT)
+            s.config(text=f"{self._fmt_bytes(av)} libres sur {self._fmt_bytes(tot)}")
+
+        v, s = self.health_tiles["disk"]
+        tot, free = data.get("disk_total"), data.get("disk_free")
+        if tot and free is not None:
+            pct = (tot - free) / tot * 100
+            v.config(text=f"{pct:.0f} % utilisé", fg=theme.RED if pct >= 95 else theme.ORANGE if pct >= 85 else theme.TEXT)
+            s.config(text=f"{self._fmt_bytes(free)} libres sur {self._fmt_bytes(tot)}")
+
+        v, s = self.health_tiles["uptime"]
+        up = data.get("uptime_s")
+        if up is not None:
+            d, rem = divmod(up, 86400)
+            h, rem = divmod(rem, 3600)
+            v.config(text=(f"{d} j {h} h" if d else f"{h} h {rem // 60:02d} min"), fg=theme.TEXT)
+            s.config(text=f"démarré le {time.strftime('%d/%m à %H:%M', time.localtime(time.time() - up))}")
+
+        v, s = self.health_tiles["sdr"]
+        n = data.get("sdr_dongles")
+        if n is not None:
+            v.config(text=str(n), fg=theme.RED if n == 0 else theme.TEXT)
+            s.config(text="aucune clé visible sur l'USB !" if n == 0 else "clé(s) RTL-SDR sur l'USB")
+
+        self.health_sys_label.config(
+            text=f"{data.get('model') or 'Raspberry Pi'}   ·   {data.get('hostname', '')}   ·   noyau {data.get('kernel', '')}",
+        )
+
+        # Bandeau + vignette
+        if th.get("under_voltage_now") or (temp is not None and temp >= 80) or n == 0:
+            chip_txt, bg, fg = "⚠ Pi : " + ("sous-tension" if th.get("under_voltage_now") else
+                                            "clé SDR absente" if n == 0 else "surchauffe"), theme.RED, "#0b0f17"
+        elif th.get("under_voltage_occurred") or (temp is not None and temp >= 70):
+            chip_txt, bg, fg = "Pi : à surveiller", theme.ORANGE, "#0b0f17"
+        else:
+            chip_txt, bg, fg = "Pi : OK", theme.BG_CARD_ALT, theme.TEXT
+        self.chip_health.config(text=f" {chip_txt} ", bg=bg, fg=fg)
+        if "health" in self.tile_chips:
+            tile = power_txt if power_col != theme.GREEN else "Alimentation OK"
+            if temp is not None:
+                tile += f" · {temp:.0f} °C"
+            self.tile_chips["health"].config(text=tile)
 
     # ------------------------------------------------------- Paramètres --
 

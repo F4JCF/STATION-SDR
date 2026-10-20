@@ -79,6 +79,22 @@ def set_sdr_mode(host: str, port: int, mode: str) -> dict:
     return resp.json()
 
 
+def set_sdr_schedule(host: str, port: int, schedule: dict) -> dict:
+    """Enregistre le partage automatique de la clé (sdr_switch.py)."""
+    url = f"http://{host}:{port}/api/sdr/schedule"
+    resp = requests.post(url, json=schedule, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_system_health(host: str, port: int) -> dict:
+    """Santé du Pi (température, sous-tension, ressources) via sdr_switch.py."""
+    url = f"http://{host}:{port}/api/system/health"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_sdr_mode(host: str, port: int) -> dict:
     """Mode actuel de la clé SDR (sdr_switch.py)."""
     url = f"http://{host}:{port}/api/sdr/mode"
