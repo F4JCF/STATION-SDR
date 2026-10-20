@@ -454,7 +454,14 @@ def vigilance_loop() -> None:
                               + (f" — Météo-France : {detail}" if detail else ""))
         except Exception as exc:
             _vigilance.update(status=f"erreur : {exc}")
-        time.sleep(1800)
+        # Attente : 30 min si tout va bien, 5 min après une erreur — mais on
+        # réessaie tout de suite si une nouvelle clé est enregistrée.
+        wait = 1800 if _vigilance.get("status") == "ok" else 300
+        for _ in range(wait // 5):
+            time.sleep(5)
+            if (load_config()["vigilance"].get("api_key") or "") != key:
+                _vigilance.update(status="nouvelle clé : vérification en cours…")
+                break
 
 
 def collector_loop() -> None:
