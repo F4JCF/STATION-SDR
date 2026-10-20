@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "port_sdr_switch": 5006,
     "port_ais": 8100,
     "port_svxlink": 5007,
+    "port_winlink": 8080,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,

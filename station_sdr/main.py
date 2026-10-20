@@ -8,6 +8,7 @@ périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 
 import io
 import math
+from datetime import datetime
 import re
 import os
 import sys
@@ -516,15 +517,7 @@ class App(tk.Tk):
         self._build_weather_tab(self.pages["weather"])
         self._build_aircraft_table(self.pages["aircraft"])
         self._build_aprs_tab(self.pages["aprs"])
-        self._build_info_tab(
-            self.pages["winlink"], "Winlink", "winlink",
-            "Aucune passerelle Winlink (par ex. Pat Winlink) n'est installée sur\n"
-            "F4JCF-SDR-STATION pour l'instant. Winlink permet d'échanger des emails\n"
-            "par radio (paquet, VARA, Ardop) via un réseau de stations relais.\n\n"
-            "Pour l'intégrer ici, il faudrait installer un client Winlink sur le\n"
-            "Raspberry et exposer son état (connecté, file d'attente, dernière\n"
-            "synchronisation) via une petite API, comme pour les autres services.",
-        )
+        self._build_winlink_tab(self.pages["winlink"])
         self._build_ais_tab(self.pages["ais"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
@@ -694,6 +687,7 @@ class App(tk.Tk):
         self._fetch(
             lambda: api_client.get_sdr_mode(host, cfg.get("port_sdr_switch", 5006)), self._render_sdr_mode,
         )
+        self._fetch_winlink()
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -2155,6 +2149,253 @@ class App(tk.Tk):
                 f"Pour {addressee} : {msg.strip()}\nReçu à {time.strftime('%H:%M:%S', time.localtime(heard))}",
                 cooldown=24 * 3600,
             )
+
+    # ------------------------------------------------------------ Winlink --
+
+    def _build_winlink_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        head_outer = theme.card(wrapper)
+        head_outer.pack(fill="x", padx=12, pady=(8, 8))
+        head = head_outer.inner
+        head.configure(padding=14)
+        tk.Label(head, text="Winlink (Pat)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+        self.wl_pill = theme.pill(head, "INCONNU", theme.MUTED)
+        self.wl_pill.pack(side="left", padx=(12, 0))
+        self.wl_info = tk.Label(head, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY)
+        self.wl_info.pack(side="left", padx=(16, 0))
+        ttk.Button(
+            head, text="Ouvrir Pat dans le navigateur", style="Flat.TButton",
+            command=lambda: self._open_url(
+                f"http://{self.config_data.get('pi_host', '192.168.1.229')}:{self.config_data.get('port_winlink', 8080)}/ui"
+            ),
+        ).pack(side="right")
+        self.wl_connect_btn = ttk.Button(
+            head, text="Relever le courrier (Internet)", style="Accent.TButton", command=self._winlink_connect,
+        )
+        self.wl_connect_btn.pack(side="right", padx=(0, 8))
+
+        tiles = tk.Frame(wrapper, bg=theme.BG)
+        tiles.pack(fill="x", padx=6)
+        self.wl_tiles = {}
+        for i, (key, title) in enumerate((
+            ("conn", "CONNEXION"), ("in", "BOÎTE DE RÉCEPTION"), ("out", "BOÎTE D'ENVOI"), ("sent", "ENVOYÉS"),
+        )):
+            tiles.grid_columnconfigure(i, weight=1, uniform="wl")
+            outer = theme.card(tiles)
+            outer.grid(row=0, column=i, sticky="nsew", padx=6, pady=(0, 8))
+            inner = outer.inner
+            inner.configure(padding=14)
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+            v = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 18, "bold"))
+            v.pack(anchor="w", pady=(4, 0))
+            s = tk.Label(inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+            s.pack(anchor="w")
+            self.wl_tiles[key] = (v, s)
+
+        lists = tk.Frame(wrapper, bg=theme.BG)
+        lists.pack(fill="both", expand=True, padx=6, pady=(0, 12))
+        lists.grid_columnconfigure(0, weight=3)
+        lists.grid_columnconfigure(1, weight=2)
+        lists.grid_rowconfigure(0, weight=1)
+        self.wl_trees = {}
+        for col, (box, title) in enumerate((("in", "Messages reçus (double-clic pour lire)"), ("out", "En attente d'envoi"))):
+            outer = theme.card(lists)
+            outer.grid(row=0, column=col, sticky="nsew", padx=6)
+            inner = outer.inner
+            inner.configure(padding=12)
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
+            tree = ttk.Treeview(inner, columns=("date", "who", "subject"), show="headings", height=12)
+            tree.heading("date", text="Date")
+            tree.heading("who", text="De" if box == "in" else "À")
+            tree.heading("subject", text="Objet")
+            tree.column("date", width=110, anchor="center")
+            tree.column("who", width=110, anchor="w")
+            tree.column("subject", width=300, anchor="w")
+            tree.tag_configure("unread", foreground=theme.ACCENT)
+            tree.pack(fill="both", expand=True, pady=(8, 0))
+            tree.bind("<Double-1>", lambda _e, b=box: self._winlink_open_message(b))
+            self.wl_trees[box] = tree
+        self._wl_known_inbox = None
+
+    @staticmethod
+    def _wl_addr(a):
+        if isinstance(a, dict):
+            return a.get("Addr") or a.get("addr") or ""
+        return str(a or "")
+
+    @staticmethod
+    def _wl_date(txt):
+        if not txt:
+            return "—"
+        try:
+            dt = datetime.fromisoformat(str(txt).replace("Z", "+00:00"))
+            return dt.astimezone().strftime("%d/%m %H:%M")
+        except ValueError:
+            return str(txt)[:16]
+
+    def _fetch_winlink(self):
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_winlink", 8080)
+        try:
+            data = {
+                "status": api_client.get_pat_status(host, port),
+                "in": api_client.get_pat_mailbox(host, port, "in"),
+                "out": api_client.get_pat_mailbox(host, port, "out"),
+                "sent": api_client.get_pat_mailbox(host, port, "sent"),
+            }
+        except Exception as exc:
+            self.after(0, self._render_winlink, None, str(exc))
+            return
+        self.after(0, self._render_winlink, data, None)
+
+    def _render_winlink(self, data, error):
+        if not hasattr(self, "wl_tiles"):
+            return
+        if error:
+            self.wl_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
+            self.wl_info.config(text="Pat ne répond pas sur le port 8080 — installez-le avec install_winlink.sh.")
+            if "winlink" in self.tile_chips:
+                self.tile_chips["winlink"].config(text="Non configuré")
+            return
+        st = data.get("status") or {}
+        inbox, outbox, sent = data.get("in") or [], data.get("out") or [], data.get("sent") or []
+        if st.get("connected"):
+            pill, col = "CONNECTÉ", theme.GREEN
+        elif st.get("dialing"):
+            pill, col = "APPEL EN COURS", theme.ORANGE
+        else:
+            pill, col = "EN SERVICE", theme.GREEN
+        self.wl_pill.config(text=f"  {pill}  ", bg=col)
+        listeners = ", ".join(st.get("active_listeners") or []) or "aucune"
+        self.wl_info.config(text=f"Écoute (P2P / RMS) : {listeners}")
+
+        v, s = self.wl_tiles["conn"]
+        if st.get("connected"):
+            v.config(text="Connecté", fg=theme.GREEN)
+            s.config(text=st.get("remote_addr") or "")
+        elif st.get("dialing"):
+            v.config(text="Appel…", fg=theme.ORANGE)
+            s.config(text="")
+        else:
+            v.config(text="Libre", fg=theme.TEXT)
+            s.config(text="prêt à relever le courrier")
+        unread = sum(1 for m in inbox if m.get("Unread"))
+        v, s = self.wl_tiles["in"]
+        v.config(text=str(len(inbox)), fg=theme.ACCENT if unread else theme.TEXT)
+        s.config(text=f"dont {unread} non lu(s)" if unread else "aucun message non lu")
+        v, s = self.wl_tiles["out"]
+        v.config(text=str(len(outbox)), fg=theme.ORANGE if outbox else theme.TEXT)
+        s.config(text="partiront au prochain relevé" if outbox else "rien en attente")
+        v, s = self.wl_tiles["sent"]
+        v.config(text=str(len(sent)), fg=theme.TEXT)
+        s.config(text=f"dernier : {self._wl_date(sent[0].get('Date'))}" if sent else "")
+
+        for box, msgs in (("in", inbox), ("out", outbox)):
+            tree = self.wl_trees[box]
+            sel = tree.selection()
+            tree.delete(*tree.get_children())
+            for m in msgs:
+                who = self._wl_addr(m.get("From")) if box == "in" else ", ".join(self._wl_addr(a) for a in (m.get("To") or []))
+                mid = m.get("MID") or ""
+                if not mid or tree.exists(mid):
+                    continue
+                tree.insert("", "end", iid=mid, values=(self._wl_date(m.get("Date")), who, m.get("Subject") or ""),
+                            tags=("unread",) if m.get("Unread") else ())
+            for iid in sel:
+                if tree.exists(iid):
+                    tree.selection_add(iid)
+
+        # Nouveaux messages reçus depuis le dernier passage
+        mids = {m.get("MID") for m in inbox}
+        if self._wl_known_inbox is not None:
+            for m in inbox:
+                if m.get("MID") not in self._wl_known_inbox:
+                    self._raise_alert(
+                        f"winlink:{m.get('MID')}", f"Winlink — message de {self._wl_addr(m.get('From'))}",
+                        f"Objet : {m.get('Subject') or '(sans objet)'}", cooldown=10 ** 9,
+                    )
+        self._wl_known_inbox = mids
+        if "winlink" in self.tile_chips:
+            self.tile_chips["winlink"].config(
+                text=(f"{unread} non lu(s)" if unread else f"{len(inbox)} message(s)") + (f" · {len(outbox)} à envoyer" if outbox else ""),
+            )
+
+    def _winlink_connect(self):
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_winlink", 8080)
+        self.wl_connect_btn.config(state="disabled", text="Relevé en cours…")
+
+        def worker():
+            try:
+                res = api_client.pat_connect(host, port, "telnet")
+                err = None
+            except Exception as exc:
+                res, err = None, str(exc)
+            self.after(0, done, res, err)
+
+        def done(res, err):
+            self.wl_connect_btn.config(state="normal", text="Relever le courrier (Internet)")
+            if err:
+                messagebox.showerror(
+                    "Winlink",
+                    "Le relevé a échoué.\n\nVérifiez dans Pat (navigateur → Settings) que l'indicatif et le mot de "
+                    f"passe Winlink sont renseignés, et que le Pi a accès à Internet.\n\nDétail : {err}",
+                )
+            else:
+                n = (res or {}).get("NumReceived", 0)
+                messagebox.showinfo("Winlink", f"Relevé terminé : {n} nouveau(x) message(s).")
+            threading.Thread(target=self._fetch_winlink, daemon=True).start()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _winlink_open_message(self, box):
+        tree = self.wl_trees[box]
+        sel = tree.selection()
+        if not sel:
+            return
+        mid = sel[0]
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_winlink", 8080)
+
+        def worker():
+            try:
+                msg = api_client.get_pat_message(host, port, box, mid)
+                if box == "in":
+                    try:
+                        api_client.pat_mark_read(host, port, box, mid)
+                    except Exception:
+                        pass
+                err = None
+            except Exception as exc:
+                msg, err = None, str(exc)
+            self.after(0, show, msg, err)
+
+        def show(msg, err):
+            if err:
+                messagebox.showerror("Winlink", f"Impossible d'ouvrir le message : {err}")
+                return
+            win = tk.Toplevel(self)
+            win.title(msg.get("Subject") or "Message Winlink")
+            win.configure(bg=theme.BG_CARD)
+            win.geometry("720x520")
+            to = ", ".join(self._wl_addr(a) for a in (msg.get("To") or []))
+            hdr = (f"De : {self._wl_addr(msg.get('From'))}\nÀ : {to}\nDate : {self._wl_date(msg.get('Date'))}\n"
+                   f"Objet : {msg.get('Subject') or ''}")
+            files = msg.get("Files") or []
+            if files:
+                hdr += "\nPièces jointes : " + ", ".join(str(f.get("Name", f)) if isinstance(f, dict) else str(f) for f in files)
+            tk.Label(win, text=hdr, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY, justify="left",
+                     anchor="w").pack(fill="x", padx=14, pady=(12, 8))
+            txt = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, insertbackground=theme.TEXT, wrap="word",
+                          font=("Consolas", 10), relief="flat", padx=10, pady=10)
+            txt.insert("1.0", msg.get("Body") or "")
+            txt.config(state="disabled")
+            txt.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+            threading.Thread(target=self._fetch_winlink, daemon=True).start()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------- Pages informatives --
 

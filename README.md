@@ -180,3 +180,14 @@ curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/in
 Installe `svxlink_api.py` (port 5007), qui suit `/var/log/svxlink` : émission,
 squelch, module actif, stations EchoLink connectées, journal d'activité et
 avertissements (saturation audio, annonces vocales manquantes).
+
+## Winlink (Pat)
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_winlink.sh | sudo bash
+```
+
+Installe Pat (client Winlink, paquet officiel), configure l'indicatif et le
+locator, ouvre son interface web et son API sur le port 8080 (réseau local).
+Le mot de passe Winlink se saisit dans Pat (navigateur → Settings), jamais
+dans STATION-SDR.

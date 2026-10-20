@@ -112,6 +112,41 @@ def get_aprs_packets(host: str, port: int) -> list:
     return resp.json()
 
 
+def get_pat_status(host: str, port: int) -> dict:
+    """État de Pat (client Winlink) : connexion en cours, écoutes actives."""
+    resp = requests.get(f"http://{host}:{port}/api/status", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_pat_mailbox(host: str, port: int, box: str) -> list:
+    """Messages d'une boîte Pat : in, out, sent, archive."""
+    resp = requests.get(f"http://{host}:{port}/api/mailbox/{box}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json() or []
+
+
+def get_pat_message(host: str, port: int, box: str, mid: str) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/mailbox/{box}/{mid}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def pat_mark_read(host: str, port: int, box: str, mid: str) -> None:
+    requests.post(f"http://{host}:{port}/api/mailbox/{box}/{mid}/read", timeout=TIMEOUT).raise_for_status()
+
+
+def pat_connect(host: str, port: int, alias: str) -> dict:
+    """Lance un relevé Winlink (ex. alias "telnet" = CMS par Internet).
+    Peut durer plusieurs minutes selon le volume de courrier."""
+    resp = requests.post(f"http://{host}:{port}/api/connect", params={"url": alias}, timeout=600)
+    resp.raise_for_status()
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
 def restart_service(host: str, port: int, key: str) -> dict:
     """Demande le redémarrage d'un service via station_api.py (POST)."""
     url = f"http://{host}:{port}/api/services/{key}/restart"
