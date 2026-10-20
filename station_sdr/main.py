@@ -640,13 +640,13 @@ class App(tk.Tk):
                 logo_img = ico.convert("RGBA")
             except Exception:
                 logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
-            logo_img = logo_img.resize((140, 140), Image.LANCZOS)
+            logo_img = logo_img.resize((190, 190), Image.LANCZOS)
             # Le logo est rond : on masque les coins (blancs) pour qu'il se
             # détache proprement sur le fond sombre.
             mask = Image.new("L", (560, 560), 0)
             ImageDraw.Draw(mask).ellipse([4, 4, 555, 555], fill=255)
-            mask = mask.resize((140, 140), Image.LANCZOS)
-            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (140, 140), 0), mask)
+            mask = mask.resize((190, 190), Image.LANCZOS)
+            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (190, 190), 0), mask)
             logo_img.putalpha(alpha)
             self._header_logo_image = ImageTk.PhotoImage(logo_img)
             tk.Label(header, image=self._header_logo_image, bg=theme.BG).pack(side="left", padx=(0, 14))
@@ -2804,7 +2804,7 @@ class App(tk.Tk):
         self.vigi_rows = tk.Frame(f, bg=theme.BG_CARD)
         self.vigi_rows.pack(anchor="w", fill="x", pady=(8, 0))
         self.vigi_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
-                                    wraplength=420, justify="left")
+                                    wraplength=560, justify="left")
         self.vigi_status.pack(anchor="w", pady=(6, 0))
         key_row = tk.Frame(f, bg=theme.BG_CARD)
         self.vigi_key_row = key_row
@@ -2813,7 +2813,7 @@ class App(tk.Tk):
         ttk.Entry(key_row, textvariable=self.vigi_key_var, width=28, show="•").pack(side="left", padx=6)
         ttk.Button(key_row, text="Enregistrer", style="Flat.TButton", command=self._vigi_save_key).pack(side="left")
         ttk.Button(key_row, text="Créer une clé (gratuit)", style="Flat.TButton",
-                   command=lambda: self._open_url("https://portail-api.meteofrance.fr/")).pack(side="left", padx=(6, 0))
+                   command=lambda: self._open_url("https://portail-api.meteofrance.fr/web/fr/")).pack(side="left", padx=(6, 0))
         self._vigi_key_shown = False
 
     def _fetch_vigilance(self):
@@ -2837,8 +2837,8 @@ class App(tk.Tk):
         elif data.get("status") == "non configurée":
             self.vigi_status.config(
                 text=("Pour afficher la vigilance : créez un compte gratuit sur le portail API de Météo-France, "
-                      "abonnez-vous à l'API « Données Publiques Vigilance », générez une clé (API Key) et collez-la "
-                      "ci-dessous. Elle est enregistrée sur le Pi."), fg=theme.MUTED)
+                      "abonnez une application à l'API « Bulletin Vigilance », générez sa clé (onglet API Key, "
+                      "durée 0) et collez-la ci-dessous. Elle est enregistrée sur le Pi."), fg=theme.MUTED)
             show_key = True
         elif data.get("status") != "ok":
             self.vigi_status.config(text=f"Vigilance indisponible ({data.get('status')}).", fg=theme.ORANGE)

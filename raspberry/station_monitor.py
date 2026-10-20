@@ -401,6 +401,32 @@ def parse_vigilance(data: dict, dept: str) -> list:
     return periods
 
 
+def fetch_vigilance(key: str) -> dict:
+    """Le portail Météo-France délivre deux sortes d'identifiants : une
+    « API Key » (en-tête apikey) ou un jeton OAuth2 (en-tête Authorization:
+    Bearer, valable 1 h). On essaie les deux pour éviter qu'une clé correcte
+    soit refusée parce qu'elle n'est pas envoyée sous la bonne forme."""
+    last = None
+    for headers in ({"apikey": key}, {"Authorization": f"Bearer {key}"}):
+        headers["accept"] = "*/*"
+        req = urllib.request.Request(VIGI_URL, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", "replace")
+                msg = json.loads(body)
+                exc.detail = (msg.get("description") or msg.get("message") or msg.get("fault", {}).get("message")
+                              or body)[:200] if isinstance(msg, dict) else body[:200]
+            except Exception:
+                exc.detail = ""
+            last = exc
+            if exc.code not in (401, 403):
+                raise
+    raise last
+
+
 def vigilance_loop() -> None:
     while True:
         cfg = load_config()
@@ -410,9 +436,7 @@ def vigilance_loop() -> None:
             time.sleep(60)
             continue
         try:
-            req = urllib.request.Request(VIGI_URL, headers={"apikey": key, "accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8", "replace"))
+            data = fetch_vigilance(key.strip())
             periods = parse_vigilance(data, dept)
             _vigilance.update(status="ok", fetched_at=time.time(), periods=periods, dept=dept)
             for per in periods:
@@ -425,7 +449,9 @@ def vigilance_loop() -> None:
                                f"Météo-France place le département {dept} en vigilance {per['max_color_name']} "
                                f"{day} : {phen}.", 5 if per["max_color"] == 4 else 4, "vigilance")
         except urllib.error.HTTPError as exc:
-            _vigilance.update(status=f"erreur {exc.code}" + (" : clé API refusée" if exc.code in (401, 403) else ""))
+            detail = getattr(exc, "detail", "")
+            _vigilance.update(status=f"erreur {exc.code}" + (" : clé API refusée" if exc.code in (401, 403) else "")
+                              + (f" — Météo-France : {detail}" if detail else ""))
         except Exception as exc:
             _vigilance.update(status=f"erreur : {exc}")
         time.sleep(1800)
