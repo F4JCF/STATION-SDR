@@ -7,11 +7,13 @@ périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 """
 
 import io
+import math
 import os
 import sys
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from collections import deque
 from tkinter import messagebox, simpledialog, ttk
 
@@ -62,10 +64,19 @@ HOME_TILES = [
     ("weather", "Météo", "Relevé METAR local"),
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
     ("aprs", "APRS", "Direwolf — réception de paquets"),
+    ("ais", "AIS", "Trafic maritime"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Récepteurs SDR", "Allocation des tuners"),
+    ("svxlink", "SvxLink", "Relais vocal / Echolink"),
+    ("openwebrx", "OpenWebRX", "Réception SDR (ouvre le navigateur)"),
     ("services", "Services système", "Vue d'ensemble des services"),
 ]
+
+# Vignettes qui n'ouvrent pas une page interne mais une page web externe
+# (le Pi héberge directement l'interface, inutile de la reproduire ici).
+EXTERNAL_TILES = {
+    "openwebrx": lambda cfg: f"http://{cfg.get('pi_host', '192.168.1.229')}:{cfg.get('port_openwebrx', 8073)}/",
+}
 
 
 def _kt_to_kmh(value):
@@ -81,7 +92,6 @@ def _fmt(value):
 
 def _haversine_nm(lat1, lon1, lat2, lon2):
     """Distance orthodromique en milles nautiques entre deux points."""
-    import math
     try:
         lat1, lon1, lat2, lon2 = map(math.radians, (lat1, lon1, lat2, lon2))
     except (TypeError, ValueError):
@@ -153,6 +163,129 @@ def _plane_icon(alt_ft, track, size=22):
     return photo
 
 
+def _hex_to_rgb(hex_color: str) -> tuple:
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+_TILE_ICON_CACHE = {}
+
+
+def _tile_icon(key: str, size: int = 30, color: str = None):
+    """Pictogramme monoligne pour une vignette d'accueil, dessiné à la
+    volée (pas de fichier image à gérer/embarquer). Mis en cache par
+    (clé, taille, couleur) — le cache est gardé en mémoire pour toute la
+    durée du programme, comme pour les icônes avion."""
+    color = color or theme.ACCENT
+    cache_key = (key, size, color)
+    cached = _TILE_ICON_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    lw = max(1, round(size / 15))
+
+    def pt(fx, fy):
+        return (fx * size, fy * size)
+
+    cx, cy = size * 0.5, size * 0.5
+
+    if key == "weather":
+        # Soleil (cercle + rayons) partiellement masqué par un nuage, dans
+        # le style classique "éclaircies". Le nuage est rempli avec le fond
+        # réel de la vignette pour occulter proprement les rayons dessous
+        # (ces icônes ne sont utilisées que sur un fond Card.TFrame).
+        sx, sy, sr = size * 0.30, size * 0.30, size * 0.15
+        d.ellipse([sx - sr, sy - sr, sx + sr, sy + sr], outline=color, width=lw)
+        for ang_deg in (0, 45, 90, 135, 180, 225, 270, 315):
+            ang = math.radians(ang_deg)
+            x1, y1 = sx + (sr + size * 0.05) * math.cos(ang), sy + (sr + size * 0.05) * math.sin(ang)
+            x2, y2 = sx + (sr + size * 0.14) * math.cos(ang), sy + (sr + size * 0.14) * math.sin(ang)
+            d.line([x1, y1, x2, y2], fill=color, width=lw)
+
+        mask_fill = _hex_to_rgb(theme.BG_CARD) + (255,)
+        d.rounded_rectangle(
+            [*pt(0.16, 0.52), *pt(0.98, 0.88)], radius=size * 0.16, fill=mask_fill, outline=color, width=lw,
+        )
+        bx, by, br = size * 0.38, size * 0.50, size * 0.17
+        d.ellipse([bx - br, by - br, bx + br, by + br], fill=mask_fill, outline=color, width=lw)
+    elif key == "aircraft":
+        d.polygon(
+            [
+                pt(0.50, 0.04), pt(0.62, 0.42), pt(0.96, 0.60), pt(0.96, 0.70),
+                pt(0.62, 0.58), pt(0.58, 0.84), pt(0.76, 0.94), pt(0.76, 1.00),
+                pt(0.50, 0.90), pt(0.24, 1.00), pt(0.24, 0.94), pt(0.42, 0.84),
+                pt(0.38, 0.58), pt(0.04, 0.70), pt(0.04, 0.60), pt(0.38, 0.42),
+            ],
+            fill=color,
+        )
+    elif key == "aprs":
+        ax, ay = cx, size * 0.82
+        d.ellipse([ax - size * 0.07, ay - size * 0.07, ax + size * 0.07, ay + size * 0.07], fill=color)
+        for r in (0.20, 0.36, 0.52):
+            rad = size * r
+            d.arc([ax - rad, ay - rad, ax + rad, ay + rad], start=200, end=340, fill=color, width=lw)
+    elif key == "ais":
+        d.polygon([pt(0.08, 0.72), pt(0.92, 0.72), pt(0.76, 0.92), pt(0.24, 0.92)], outline=color, width=lw)
+        d.line([*pt(0.5, 0.72), *pt(0.5, 0.10)], fill=color, width=lw)
+        d.polygon([pt(0.5, 0.10), pt(0.5, 0.40), pt(0.80, 0.26)], fill=color)
+    elif key == "winlink":
+        d.rectangle([*pt(0.06, 0.22), *pt(0.94, 0.78)], outline=color, width=lw)
+        d.line([*pt(0.06, 0.24), *pt(0.5, 0.56)], fill=color, width=lw)
+        d.line([*pt(0.94, 0.24), *pt(0.5, 0.56)], fill=color, width=lw)
+    elif key == "sdr":
+        d.line([*pt(0.5, 0.05), *pt(0.5, 0.95)], fill=color, width=lw)
+        d.line([*pt(0.18, 0.95), *pt(0.82, 0.95)], fill=color, width=lw)
+        d.line([*pt(0.5, 0.05), *pt(0.22, 0.32)], fill=color, width=lw)
+        d.line([*pt(0.5, 0.05), *pt(0.78, 0.32)], fill=color, width=lw)
+        d.line([*pt(0.5, 0.38), *pt(0.30, 0.58)], fill=color, width=lw)
+        d.line([*pt(0.5, 0.38), *pt(0.70, 0.58)], fill=color, width=lw)
+    elif key == "svxlink":
+        d.rounded_rectangle([*pt(0.34, 0.06), *pt(0.66, 0.58)], radius=size * 0.14, outline=color, width=lw)
+        d.arc([*pt(0.18, 0.28), *pt(0.82, 0.78)], start=20, end=160, fill=color, width=lw)
+        d.line([*pt(0.5, 0.72), *pt(0.5, 0.92)], fill=color, width=lw)
+        d.line([*pt(0.30, 0.92), *pt(0.70, 0.92)], fill=color, width=lw)
+    elif key == "openwebrx":
+        d.rounded_rectangle([*pt(0.05, 0.10), *pt(0.95, 0.72)], radius=size * 0.06, outline=color, width=lw)
+        d.line([*pt(0.5, 0.72), *pt(0.5, 0.88)], fill=color, width=lw)
+        d.line([*pt(0.28, 0.92), *pt(0.72, 0.92)], fill=color, width=lw)
+        d.line(
+            [pt(0.14, 0.45), pt(0.28, 0.28), pt(0.40, 0.54), pt(0.54, 0.24), pt(0.68, 0.50), pt(0.86, 0.38)],
+            fill=color, width=max(1, lw - 1),
+        )
+    elif key == "services":
+        teeth = 8
+        outer_r, inner_r, hole_r = size * 0.42, size * 0.30, size * 0.14
+        pts = []
+        for t in range(teeth * 2):
+            ang = math.pi * t / teeth
+            r = outer_r if t % 2 == 0 else inner_r
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+        d.polygon(pts, outline=color, width=lw)
+        d.ellipse([cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r], outline=color, width=lw)
+    else:
+        d.ellipse([*pt(0.08, 0.08), *pt(0.92, 0.92)], outline=color, width=lw)
+
+    photo = ImageTk.PhotoImage(img)
+    _TILE_ICON_CACHE[cache_key] = photo
+    return photo
+
+
+def _find_service(data: dict, *name_fragments: str):
+    """Cherche un service dans la réponse de station_api.py dont la clé ou
+    le libellé contient un des fragments donnés (insensible à la casse) —
+    utilisé pour des services dont on ne connaît pas la clé exacte côté Pi
+    (AIS, SvxLink), sans faire planter l'app si elle diffère."""
+    fragments = [f.lower() for f in name_fragments]
+    for key, info in data.items():
+        label = str(info.get("label", key)).lower()
+        key_l = key.lower()
+        if any(f in key_l or f in label for f in fragments):
+            return info
+    return None
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -190,6 +323,17 @@ class App(tk.Tk):
         app_menu.add_separator()
         app_menu.add_command(label="Quitter", command=self._on_close)
         menubar.add_cascade(label="STATION-SDR", menu=app_menu)
+
+        # Liste déroulante de toutes les applications/modules disponibles,
+        # pour y accéder directement sans passer par l'écran d'accueil.
+        modules_menu = tk.Menu(menubar, tearoff=0)
+        modules_menu.add_command(label="Accueil", command=self.show_home)
+        modules_menu.add_separator()
+        for key, title, _subtitle in HOME_TILES:
+            suffix = " (navigateur)" if key in EXTERNAL_TILES else ""
+            modules_menu.add_command(label=f"{title}{suffix}", command=lambda k=key: self.show_page(k))
+        menubar.add_cascade(label="Modules", menu=modules_menu)
+
         self.config(menu=menubar)
 
     def _build_header(self):
@@ -253,20 +397,45 @@ class App(tk.Tk):
         self.page_area.pack(fill="both", expand=True)
 
         self.home_frame = tk.Frame(self.page_area, bg=theme.BG)
+        # Une page par vignette, sauf celles listées dans EXTERNAL_TILES
+        # (ouvrent une page web externe plutôt qu'une vue interne).
         self.pages = {
-            "weather": tk.Frame(self.page_area, bg=theme.BG),
-            "aircraft": tk.Frame(self.page_area, bg=theme.BG),
-            "aprs": tk.Frame(self.page_area, bg=theme.BG),
-            "winlink": tk.Frame(self.page_area, bg=theme.BG),
-            "services": tk.Frame(self.page_area, bg=theme.BG),
-            "sdr": tk.Frame(self.page_area, bg=theme.BG),
+            key: tk.Frame(self.page_area, bg=theme.BG)
+            for key, _title, _subtitle in HOME_TILES
+            if key not in EXTERNAL_TILES
         }
 
         self._build_home_tiles()
         self._build_weather_tab(self.pages["weather"])
         self._build_aircraft_table(self.pages["aircraft"])
         self._build_aprs_tab(self.pages["aprs"])
-        self._build_winlink_tab(self.pages["winlink"])
+        self._build_info_tab(
+            self.pages["winlink"], "Winlink", "winlink",
+            "Aucune passerelle Winlink (par ex. Pat Winlink) n'est installée sur\n"
+            "F4JCF-SDR-STATION pour l'instant. Winlink permet d'échanger des emails\n"
+            "par radio (paquet, VARA, Ardop) via un réseau de stations relais.\n\n"
+            "Pour l'intégrer ici, il faudrait installer un client Winlink sur le\n"
+            "Raspberry et exposer son état (connecté, file d'attente, dernière\n"
+            "synchronisation) via une petite API, comme pour les autres services.",
+        )
+        self._build_info_tab(
+            self.pages["ais"], "AIS", "ais",
+            "Suivi du trafic maritime (navires équipés d'un transpondeur AIS) par\n"
+            "récepteur SDR, décodé par ex. par rtl_ais ou AIS-catcher sur le Pi.\n\n"
+            "Le statut ci-dessous reflète le service tel que rapporté par\n"
+            "station_api.py. Pour afficher ici la liste des navires détectés\n"
+            "(position, cap, MMSI...), il faudrait une petite API dédiée, comme\n"
+            "aprs_api.py pour l'APRS.",
+        )
+        self._build_info_tab(
+            self.pages["svxlink"], "SvxLink", "svxlink",
+            "Relais vocal radioamateur (répéteur logiciel, passerelle Echolink/\n"
+            "DMR/RoIP selon configuration) tournant sur le Pi.\n\n"
+            "Le statut ci-dessous reflète le service tel que rapporté par\n"
+            "station_api.py. Pour afficher ici l'activité en direct (dernier\n"
+            "indicatif entendu, nœuds Echolink connectés...), il faudrait exposer\n"
+            "ces informations via une petite API dédiée.",
+        )
 
         self.show_home()
 
@@ -284,10 +453,16 @@ class App(tk.Tk):
             inner = outer.inner
             inner.configure(padding=18)
 
+            header_row = tk.Frame(inner, bg=theme.BG_CARD)
+            header_row.pack(anchor="w", fill="x")
+            icon_image = _tile_icon(key, size=30)
+            icon_label = tk.Label(header_row, image=icon_image, bg=theme.BG_CARD)
+            icon_label.image = icon_image  # garde une référence (sinon Tk l'efface du GC)
+            icon_label.pack(side="left", padx=(0, 10))
             title_label = tk.Label(
-                inner, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+                header_row, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
             )
-            title_label.pack(anchor="w")
+            title_label.pack(side="left")
             subtitle_label = tk.Label(
                 inner, text=subtitle, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                 wraplength=220, justify="left",
@@ -297,7 +472,7 @@ class App(tk.Tk):
             chip_label.pack(anchor="w")
             self.tile_chips[key] = chip_label
 
-            for widget in (outer, inner, title_label, subtitle_label, chip_label):
+            for widget in (outer, inner, header_row, icon_label, title_label, subtitle_label, chip_label):
                 widget.bind("<Button-1>", lambda _e, k=key: self.show_page(k))
                 try:
                     widget.configure(cursor="hand2")
@@ -308,6 +483,13 @@ class App(tk.Tk):
         self._show_view(None)
 
     def show_page(self, key):
+        if key in EXTERNAL_TILES:
+            url = EXTERNAL_TILES[key](self.config_data)
+            try:
+                webbrowser.open(url)
+            except Exception as exc:
+                messagebox.showerror("Ouverture", f"Impossible d'ouvrir {url} :\n{exc}")
+            return
         self._show_view(key)
 
     def _show_view(self, key):
@@ -989,9 +1171,14 @@ class App(tk.Tk):
             if lat is not None and lon is not None:
                 self.aprs_map.set_marker(lat, lon, text=st.get("callsign", ""))
 
-    # --------------------------------------------------------- Winlink --
+    # ------------------------------------------------- Pages informatives --
 
-    def _build_winlink_tab(self, frame):
+    def _build_info_tab(self, frame, title: str, status_key: str, body_text: str):
+        """Page simple pour un module dont le Pi n'expose pas (encore)
+        d'API dédiée : titre, statut (mis à jour depuis les services
+        système quand un service correspondant est trouvé) et explication
+        honnête de ce qui manque pour aller plus loin. Réutilisé par
+        Winlink, AIS et SvxLink."""
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
@@ -1001,23 +1188,20 @@ class App(tk.Tk):
         inner.configure(padding=18)
 
         tk.Label(
-            inner, text="Winlink", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+            inner, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
         ).pack(anchor="w")
-        theme.pill(inner, "NON CONFIGURÉ", theme.MUTED).pack(anchor="w", pady=(10, 14))
+        status_pill = theme.pill(inner, "NON CONFIGURÉ", theme.MUTED)
+        status_pill.pack(anchor="w", pady=(10, 14))
+        if not hasattr(self, "_info_status_pills"):
+            self._info_status_pills = {}
+        self._info_status_pills[status_key] = status_pill
 
         tk.Label(
-            inner,
-            text="Aucune passerelle Winlink (par ex. Pat Winlink) n'est installée sur\n"
-                 "F4JCF-SDR-STATION pour l'instant. Winlink permet d'échanger des emails\n"
-                 "par radio (paquet, VARA, Ardop) via un réseau de stations relais.\n\n"
-                 "Pour l'intégrer ici, il faudrait installer un client Winlink sur le\n"
-                 "Raspberry et exposer son état (connecté, file d'attente, dernière\n"
-                 "synchronisation) via une petite API, comme pour les autres services.",
-            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left",
+            inner, text=body_text, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left",
         ).pack(anchor="w")
 
-        if "winlink" in self.tile_chips:
-            self.tile_chips["winlink"].config(text="Non configuré")
+        if status_key in self.tile_chips:
+            self.tile_chips[status_key].config(text="Non configuré")
 
     # ---------------------------------------------------------- Services --
 
@@ -1043,6 +1227,22 @@ class App(tk.Tk):
             self.aprs_badge.config(text=f"  {text}  ", bg=color)
             if "aprs" in self.tile_chips:
                 self.tile_chips["aprs"].config(text=text)
+
+        # AIS et SvxLink : on ne connaît pas la clé exacte utilisée côté Pi
+        # pour ces services, donc on cherche par correspondance de nom
+        # plutôt que de supposer une clé figée (voir _find_service).
+        for status_key, fragments in (("ais", ("ais",)), ("svxlink", ("svxlink", "svx"))):
+            info = _find_service(data, *fragments)
+            if info is None:
+                continue  # service absent de la réponse : on garde "Non configuré"
+            is_running = bool(info.get("running"))
+            text = "EN COURS" if is_running else "ARRÊTÉ"
+            color = theme.GREEN if is_running else theme.RED
+            if status_key in self.tile_chips:
+                self.tile_chips[status_key].config(text=text)
+            pill = getattr(self, "_info_status_pills", {}).get(status_key)
+            if pill is not None:
+                pill.config(text=f"  {text}  ", bg=color)
 
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)

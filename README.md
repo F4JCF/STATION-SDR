@@ -27,8 +27,17 @@ Tableau de bord Windows pour le Raspberry Pi multi-fonctions **F4JCF-SDR-STATION
 - **APRS** — stations entendues (position, distance/direction, commentaire)
   décodées depuis le flux KISS de Direwolf (`aprs_api.py`, port 5004 — voir
   ci-dessous pour le déployer sur le Pi) + état du service avec redémarrage
+- **AIS** et **SvxLink** — pages informatives avec statut (en cours/arrêté,
+  remonté automatiquement depuis `station_api.py` si le service est présent
+  dans sa réponse) ; liste détaillée (navires AIS, activité SvxLink) non
+  disponible pour l'instant faute d'API dédiée côté Pi
 - **Winlink** — module informatif : non installé sur le Raspberry pour
   l'instant
+- **OpenWebRX** — vignette qui ouvre directement l'interface web OpenWebRX
+  du Pi dans le navigateur par défaut (port configurable dans Paramètres)
+- Écran d'accueil en vignettes avec pictogramme par module, et menu
+  **Modules** (barre de menus) listant tous les modules pour y accéder
+  directement sans repasser par l'accueil
 - **Mise à jour automatique** — au démarrage, l'application vérifie s'il existe
   une version plus récente sur GitHub (Releases), propose de l'installer et,
   une fois le téléchargement terminé, **se ferme puis se relance
