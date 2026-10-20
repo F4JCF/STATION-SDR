@@ -158,4 +158,14 @@ del "%~f0"
         ["cmd", "/c", batch_path],
         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
     )
-    sys.exit(0)
+
+    # sys.exit(0) ne suffit pas ici : cette fonction est appelée depuis un
+    # callback Tkinter (via self.after). Tkinter intercepte en interne les
+    # exceptions levées dans un callback — SystemExit y compris — et les
+    # route vers son propre gestionnaire d'erreurs au lieu de les laisser
+    # remonter, donc la boucle d'événements (mainloop) ne s'arrête jamais :
+    # l'appli restait ouverte indéfiniment, et le script batch attendait
+    # pour rien la fin d'un processus qui ne se terminait pas. os._exit()
+    # arrête le processus immédiatement au niveau du système d'exploitation,
+    # sans passer par la gestion d'exceptions de Python/Tkinter.
+    os._exit(0)
