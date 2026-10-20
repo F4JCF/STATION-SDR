@@ -27,9 +27,18 @@ for u in readsb dump1090-fa dump1090 ais-catcher aiscatcher AIS-catcher rtl-ais 
     fi
 done
 
+# Conteneur OpenWebRX : ne plus le relancer seul au démarrage de Docker.
+if command -v docker >/dev/null && docker inspect openwebrx >/dev/null 2>&1; then
+    docker update --restart=no openwebrx >/dev/null && echo "   - openwebrx (Docker)"
+fi
+
 systemctl daemon-reload
 systemctl enable sdr-switch.service >/dev/null
 systemctl restart sdr-switch.service
-sleep 6
 echo "== État"
-curl -s http://localhost:5006/api/sdr/mode; echo
+for i in $(seq 1 15); do
+    out=$(curl -s http://localhost:5006/api/sdr/mode) && [ -n "$out" ] && { echo "$out"; exit 0; }
+    sleep 2
+done
+echo "Le service de bascule ne répond pas. Journal :"
+journalctl -u sdr-switch -n 20 --no-pager
