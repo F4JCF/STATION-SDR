@@ -109,39 +109,85 @@ def download_asset(asset_api_url: str, github_token: str, dest_path: str) -> Non
                 f.write(chunk)
 
 
+UPDATE_LOG_PATH = os.path.join(tempfile.gettempdir(), "station_sdr_update.log")
+UPDATE_FAILURE_MARKER = os.path.join(tempfile.gettempdir(), "station_sdr_update_failed.txt")
+
+
+def read_and_clear_failure_marker() -> str | None:
+    """Si une mise à jour précédente a échoué à remplacer l'exécutable
+    (ex. verrouillé par un antivirus, dossier protégé en écriture), le
+    script de relancement laisse ce marqueur. On le lit une fois au
+    démarrage pour prévenir l'utilisateur au lieu de rester silencieux,
+    puis on le supprime pour ne pas re-signaler le même échec en boucle."""
+    try:
+        with open(UPDATE_FAILURE_MARKER, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
+        return None
+    try:
+        os.remove(UPDATE_FAILURE_MARKER)
+    except OSError:
+        pass
+    return content
+
+
 def apply_update_and_restart(new_exe_path: str) -> None:
     """Remplace l'exécutable courant par le nouveau et relance l'application.
 
     On ne peut pas remplacer un .exe pendant qu'il tourne sous Windows,
     donc on délègue le remplacement à un script batch lancé en détaché,
     qui attend que ce process se termine, remplace le fichier (avec
-    quelques tentatives si l'ancien .exe est encore brièvement verrouillé),
-    relance le nouveau .exe, puis se supprime lui-même.
+    plusieurs tentatives si l'ancien .exe est encore brièvement verrouillé
+    ou qu'un antivirus retient momentanément le nouveau), relance
+    l'exécutable, puis se supprime lui-même.
+
+    Le script journalise chaque étape (horodatée) dans UPDATE_LOG_PATH :
+    comme ce processus Python se termine juste après avoir lancé le
+    script, c'est la seule manière de diagnostiquer un échec ultérieur
+    (antivirus, permissions...) qu'on ne peut pas reproduire depuis un
+    environnement de développement Linux.
     """
     current_exe = sys.executable
     pid = os.getpid()
 
     # Le script relance l'exécutable dans tous les cas, même si le
-    # remplacement échoue (ex. fichier encore verrouillé après 10 tentatives) :
-    # l'utilisateur retrouve au moins l'application ouverte plutôt que rien.
+    # remplacement échoue au bout de toutes les tentatives : l'utilisateur
+    # retrouve au moins l'application ouverte plutôt que rien, et un
+    # marqueur d'échec est laissé pour qu'on puisse le signaler au
+    # prochain démarrage plutôt que de rester silencieux.
     batch_content = f"""@echo off
+set "LOG={UPDATE_LOG_PATH}"
+set "MARKER={UPDATE_FAILURE_MARKER}"
+echo [%date% %time%] Debut (attente PID {pid}, {new_exe_path} -^> {current_exe}) > "%LOG%"
+
 :wait
 tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL
 if not errorlevel 1 (
     timeout /t 1 /nobreak >NUL
     goto wait
 )
+echo [%date% %time%] Ancien processus termine >> "%LOG%"
+
 set tries=0
 :trymove
-move /Y "{new_exe_path}" "{current_exe}" >NUL 2>&1
+move /Y "{new_exe_path}" "{current_exe}" >> "%LOG%" 2>&1
 if errorlevel 1 (
     set /a tries+=1
-    if %tries% LSS 10 (
+    echo [%date% %time%] Echec du remplacement, tentative %tries%/15 >> "%LOG%"
+    if %tries% LSS 15 (
         timeout /t 1 /nobreak >NUL
         goto trymove
     )
+    echo [%date% %time%] Abandon : remplacement impossible apres 15 tentatives >> "%LOG%"
+    echo Remplacement de "{current_exe}" par "{new_exe_path}" impossible apres 15 tentatives. > "%MARKER%"
+    echo Voir le journal complet : "{UPDATE_LOG_PATH}" >> "%MARKER%"
+) else (
+    echo [%date% %time%] Remplacement reussi >> "%LOG%"
 )
+
+echo [%date% %time%] Relancement de "{current_exe}" >> "%LOG%"
 start "" "{current_exe}"
+echo [%date% %time%] Script termine >> "%LOG%"
 del "%~f0"
 """
     batch_path = os.path.join(tempfile.gettempdir(), "station_sdr_update.bat")
@@ -154,9 +200,16 @@ del "%~f0"
     with open(batch_path, "w", encoding="mbcs", errors="replace") as f:
         f.write(batch_content)
 
+    # CREATE_NO_WINDOW seul : un script détaché qui attend la mort d'un
+    # process puis remplace/relance un .exe ressemble, combiné à
+    # DETACHED_PROCESS, à un schéma que certains antivirus traitent avec
+    # plus de suspicion (comportement de type "auto-réplication"). On
+    # reste sur le réglage le plus courant et le moins susceptible d'être
+    # bloqué : une fois ce process Python terminé (os._exit ci-dessous),
+    # le script devient de toute façon orphelin et continue de tourner.
     subprocess.Popen(
         ["cmd", "/c", batch_path],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
     # sys.exit(0) ne suffit pas ici : cette fonction est appelée depuis un

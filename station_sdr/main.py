@@ -308,6 +308,7 @@ class App(tk.Tk):
         self._build_body()
         self._tick_clock()
 
+        self.after(100, self._check_previous_update_failure)
         self.after(200, self._check_update_on_startup)
         self._start_refresh_loop()
 
@@ -1347,6 +1348,26 @@ class App(tk.Tk):
         messagebox.showinfo("Paramètres", "Paramètres enregistrés.")
 
     # --------------------------------------------------------- Updater --
+
+    def _check_previous_update_failure(self):
+        """Si une mise à jour précédente n'a pas réussi à remplacer
+        l'exécutable (antivirus, dossier protégé en écriture...), le
+        script de relancement laisse un marqueur plutôt que d'échouer en
+        silence — on le signale ici, une seule fois."""
+        details = updater.read_and_clear_failure_marker()
+        if not details:
+            return
+        messagebox.showwarning(
+            "Mise à jour précédente incomplète",
+            "La dernière mise à jour s'est fermée et relancée, mais n'a pas réussi à "
+            "remplacer le fichier exécutable (l'application a donc redémarré dans son "
+            "ancienne version) :\n\n"
+            f"{details.strip()}\n\n"
+            "Causes possibles : antivirus qui bloque/retient le nouveau fichier, ou "
+            "dossier d'installation protégé en écriture. En attendant, vous pouvez "
+            "télécharger et remplacer l'exécutable manuellement depuis :\n"
+            "https://github.com/F4JCF/STATION-SDR/releases/latest",
+        )
 
     def _check_update_on_startup(self):
         if not self.config_data.get("check_updates", True):

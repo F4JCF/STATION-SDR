@@ -93,23 +93,31 @@ entendues mais sans position sur la carte.
    - l'adresse IP du Raspberry Pi (par défaut `192.168.1.229`)
    - (optionnel) un jeton GitHub personnel, voir ci-dessous
 
-## Mise à jour automatique et dépôt privé
+## Mise à jour automatique
 
-Le dépôt `F4JCF/STATION-SDR` est **privé**. Télécharger un fichier de release
-privée nécessite une authentification GitHub, même en lecture seule. Pour que
-la vérification/mise à jour automatique fonctionne, renseigner un jeton
-d'accès personnel GitHub (*Personal Access Token*, droit `repo` en lecture
-suffit) dans **Paramètres → Jeton GitHub**.
+Le dépôt `F4JCF/STATION-SDR` est **public** : la vérification et le
+téléchargement des mises à jour fonctionnent sans jeton GitHub. Le champ
+**Paramètres → Jeton GitHub** ne reste utile que si le dépôt redevenait
+privé un jour.
 
-- Sans jeton : l'application fonctionne normalement, seule la vérification de
-  mise à jour est ignorée silencieusement.
-- Avec jeton : au démarrage, l'application compare la version installée à la
-  dernière release GitHub et propose d'installer automatiquement la nouvelle
-  version si elle est plus récente.
+Au démarrage, l'application compare sa version à la dernière release
+GitHub ; si une nouvelle version existe, elle propose de l'installer, puis
+se ferme et se relance automatiquement une fois le téléchargement terminé.
 
-Le jeton n'est jamais intégré au code ni au dépôt : il reste uniquement dans
-le fichier de configuration local de l'utilisateur
-(`%APPDATA%\STATION-SDR\config.json`).
+### En cas d'échec du redémarrage automatique
+
+Le remplacement du fichier `.exe` se fait via un petit script qui attend la
+fermeture de l'application puis déplace le nouveau fichier en place
+(plusieurs tentatives si un antivirus retient momentanément le fichier). Si
+ça échoue malgré tout :
+
+- un fichier journal détaillé est écrit dans
+  `%TEMP%\station_sdr_update.log` ;
+- l'application affiche un avertissement au démarrage suivant si le
+  remplacement a échoué, avec un lien vers ce journal ;
+- en attendant, on peut toujours télécharger et remplacer
+  `STATION-SDR.exe` manuellement depuis les
+  [Releases](https://github.com/F4JCF/STATION-SDR/releases/latest).
 
 ## Publier une nouvelle version (pour le mainteneur)
 
