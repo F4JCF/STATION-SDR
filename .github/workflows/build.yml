@@ -5,6 +5,10 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag à compiler et publier (ex: v1.1.0)"
+        required: true
 
 permissions:
   contents: write
@@ -15,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,6 +40,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/STATION-SDR.exe
           generate_release_notes: true
         env:

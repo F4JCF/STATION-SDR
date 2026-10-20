@@ -56,4 +56,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run build.yml --ref "${{ steps.version.outputs.tag }}"
+          gh workflow run build.yml --ref main -f tag="${{ steps.version.outputs.tag }}"
