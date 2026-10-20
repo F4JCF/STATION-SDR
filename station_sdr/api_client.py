@@ -51,6 +51,16 @@ def get_aprs_stations(host: str, port: int) -> list:
     return resp.json()
 
 
+def get_ais_ships(host: str, port: int) -> dict:
+    """Navires suivis par AIS-catcher (serveur web intégré, /api/ships.json).
+    Réponse : {"count": N, "ships": [{"mmsi", "shipname", "lat", "lon",
+    "speed", "cog", "distance", "last_signal", ...}]}."""
+    url = f"http://{host}:{port}/api/ships.json"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def set_sdr_mode(host: str, port: int, mode: str) -> dict:
     """Bascule l'unique clé SDR vers un module via sdr_switch.py (POST).
     Délai plus long : arrêter un service puis en démarrer un autre prend

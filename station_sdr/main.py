@@ -458,15 +458,7 @@ class App(tk.Tk):
             "Raspberry et exposer son état (connecté, file d'attente, dernière\n"
             "synchronisation) via une petite API, comme pour les autres services.",
         )
-        self._build_info_tab(
-            self.pages["ais"], "AIS", "ais",
-            "Suivi du trafic maritime (navires équipés d'un transpondeur AIS) par\n"
-            "récepteur SDR, décodé par ex. par rtl_ais ou AIS-catcher sur le Pi.\n\n"
-            "Le statut ci-dessous reflète le service tel que rapporté par\n"
-            "station_api.py. Pour afficher ici la liste des navires détectés\n"
-            "(position, cap, MMSI...), il faudrait une petite API dédiée, comme\n"
-            "aprs_api.py pour l'APRS.",
-        )
+        self._build_ais_tab(self.pages["ais"])
         self._build_info_tab(
             self.pages["svxlink"], "SvxLink", "svxlink",
             "Relais vocal radioamateur (répéteur logiciel, passerelle Echolink/\n"
@@ -628,6 +620,7 @@ class App(tk.Tk):
         self._fetch(lambda: api_client.get_services_status(host, cfg["port_services"]), self._render_services)
         self._fetch(lambda: api_client.get_sdr_status(host, cfg["port_sdr"]), self._render_sdr)
         self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
+        self._fetch(lambda: api_client.get_ais_ships(host, cfg.get("port_ais", 8100)), self._render_ais)
         self._fetch(
             lambda: api_client.get_sdr_mode(host, cfg.get("port_sdr_switch", 5006)), self._render_sdr_mode,
         )
@@ -1268,6 +1261,110 @@ class App(tk.Tk):
             )
             if lat is not None and lon is not None:
                 self.aprs_map.set_marker(lat, lon, text=st.get("callsign", ""))
+
+    # ---------------------------------------------------------------- AIS --
+
+    def _build_ais_tab(self, frame):
+        outer_wrapper = tk.Frame(frame, bg=theme.BG)
+        outer_wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Même disposition que Météo / Trafic aérien : liste à gauche,
+        # carte à droite sur toute la hauteur.
+        left = tk.Frame(outer_wrapper, bg=theme.BG)
+        left.pack(side="left", fill="y", pady=(0, 6))
+
+        status_outer = theme.card(left)
+        status_outer.pack(fill="x", padx=12, pady=(8, 8))
+        status_inner = status_outer.inner
+        status_inner.configure(padding=14)
+        tk.Label(
+            status_inner, text="AIS (AIS-catcher)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+        ).pack(side="left")
+        pill = theme.pill(status_inner, "INCONNU", theme.MUTED)
+        pill.pack(side="left", padx=(12, 0))
+        if not hasattr(self, "_info_status_pills"):
+            self._info_status_pills = {}
+        self._info_status_pills["ais"] = pill
+
+        self.ais_count_label = tk.Label(
+            left, text="Navires suivis : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
+            anchor="w", justify="left", wraplength=560,
+        )
+        self.ais_count_label.pack(anchor="w", padx=12, pady=(0, 6))
+
+        table_outer = theme.card(left)
+        table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        columns = ("name", "mmsi", "speed", "cog", "dist", "seen")
+        self.ais_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=14)
+        headings = {
+            "name": "Nom", "mmsi": "MMSI", "speed": "Vitesse (kn)",
+            "cog": "Cap (°)", "dist": "Distance (NM)", "seen": "Vu il y a",
+        }
+        widths = {"name": 150, "mmsi": 90, "speed": 80, "cog": 60, "dist": 90, "seen": 80}
+        for col in columns:
+            self.ais_tree.heading(col, text=headings[col])
+            self.ais_tree.column(col, width=widths[col], minwidth=50, anchor="w" if col == "name" else "center")
+        self.ais_tree.pack(fill="both", expand=True, padx=1, pady=1)
+        self.ais_tree.bind("<<TreeviewSelect>>", self._on_ais_select)
+
+        map_outer = theme.card(outer_wrapper)
+        map_outer.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
+        self.ais_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.ais_map.pack(fill="both", expand=True, padx=1, pady=1)
+        lat, lon = DEFAULT_COORDS
+        self.ais_map.set_position(lat, lon)
+        self.ais_map.set_zoom(10)
+        self._ais_positions = {}
+
+    def _on_ais_select(self, _event=None):
+        sel = self.ais_tree.selection()
+        if not sel:
+            return
+        pos = self._ais_positions.get(sel[0])
+        if pos:
+            self.ais_map.set_position(*pos)
+
+    def _render_ais(self, data, error):
+        for item in self.ais_tree.get_children():
+            self.ais_tree.delete(item)
+        self.ais_map.delete_all_marker()
+        self._ais_positions = {}
+
+        if error:
+            if getattr(self, "_sdr_mode", None) not in (None, "ais"):
+                label = SDR_MODE_LABELS.get(self._sdr_mode, self._sdr_mode)
+                txt = f"Navires suivis : AIS en pause — la clé SDR est sur {label}."
+            else:
+                txt = "Navires suivis : indisponible — AIS-catcher est-il installé et démarré sur le Pi ?"
+            self.ais_count_label.config(text=txt)
+            if "ais" in self.tile_chips:
+                self.tile_chips["ais"].config(text="—")
+            return
+
+        ships = data.get("ships", []) if isinstance(data, dict) else []
+        ships = sorted(ships, key=lambda s: s.get("last_signal", 1e9))
+        self.ais_count_label.config(text=f"Navires suivis : {len(ships)}")
+        if "ais" in self.tile_chips:
+            self.tile_chips["ais"].config(text=f"{len(ships)} navire(s)")
+
+        def fmt(v, nd=1):
+            return "—" if v is None else f"{v:.{nd}f}" if isinstance(v, (int, float)) else str(v)
+
+        for ship in ships:
+            name = (ship.get("shipname") or "").strip() or "(sans nom)"
+            seen = ship.get("last_signal")
+            seen_txt = "—" if seen is None else (f"{int(seen)} s" if seen < 120 else f"{int(seen // 60)} min")
+            iid = self.ais_tree.insert(
+                "", "end",
+                values=(
+                    name, ship.get("mmsi", "—"), fmt(ship.get("speed")), fmt(ship.get("cog"), 0),
+                    fmt(ship.get("distance")), seen_txt,
+                ),
+            )
+            lat, lon = ship.get("lat"), ship.get("lon")
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                self._ais_positions[iid] = (lat, lon)
+                self.ais_map.set_marker(lat, lon, text=name if name != "(sans nom)" else str(ship.get("mmsi", "")))
 
     # ------------------------------------------------- Pages informatives --
 
