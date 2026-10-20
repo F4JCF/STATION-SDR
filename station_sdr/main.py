@@ -991,7 +991,29 @@ class App(tk.Tk):
             self.after(0, messagebox.showerror, "Mise à jour",
                         f"Échec du téléchargement :\n{exc}")
             return
-        self.after(0, lambda: updater.apply_update_and_restart(dest))
+        self.after(0, self._finish_update, dest)
+
+    def _finish_update(self, dest: str):
+        # Le relancement se fait via un script batch détaché (Windows ne
+        # permet pas de remplacer un .exe en cours d'exécution) : on
+        # prévient l'utilisateur avant de fermer, sinon la fenêtre qui se
+        # ferme puis se rouvre un instant plus tard peut sembler être un
+        # plantage plutôt qu'une mise à jour.
+        messagebox.showinfo(
+            "Mise à jour",
+            "Téléchargement terminé. L'application va se fermer puis "
+            "redémarrer automatiquement avec la nouvelle version.",
+        )
+        try:
+            updater.apply_update_and_restart(dest)
+        except Exception as exc:
+            messagebox.showerror(
+                "Mise à jour",
+                "Le redémarrage automatique a échoué :\n"
+                f"{exc}\n\n"
+                "Fermez l'application et relancez-la manuellement pour "
+                "terminer l'installation.",
+            )
 
     # -------------------------------------------------------------- Fin --
 

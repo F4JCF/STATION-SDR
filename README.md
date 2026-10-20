@@ -22,7 +22,9 @@ Tableau de bord Windows pour le Raspberry Pi multi-fonctions **F4JCF-SDR-STATION
 - **Winlink** — module informatif : non installé sur le Raspberry pour
   l'instant
 - **Mise à jour automatique** — au démarrage, l'application vérifie s'il existe
-  une version plus récente sur GitHub (Releases) et propose de l'installer
+  une version plus récente sur GitHub (Releases), propose de l'installer et,
+  une fois le téléchargement terminé, **se ferme puis se relance
+  automatiquement** avec la nouvelle version (aucune action manuelle requise)
 
 Écran d'accueil en vignettes cliquables, une par module. Rafraîchissement
 automatique toutes les 15 secondes (réglable).

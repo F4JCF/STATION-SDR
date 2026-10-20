@@ -114,11 +114,16 @@ def apply_update_and_restart(new_exe_path: str) -> None:
 
     On ne peut pas remplacer un .exe pendant qu'il tourne sous Windows,
     donc on délègue le remplacement à un script batch lancé en détaché,
-    qui attend que ce process se termine avant d'agir.
+    qui attend que ce process se termine, remplace le fichier (avec
+    quelques tentatives si l'ancien .exe est encore brièvement verrouillé),
+    relance le nouveau .exe, puis se supprime lui-même.
     """
     current_exe = sys.executable
     pid = os.getpid()
 
+    # Le script relance l'exécutable dans tous les cas, même si le
+    # remplacement échoue (ex. fichier encore verrouillé après 10 tentatives) :
+    # l'utilisateur retrouve au moins l'application ouverte plutôt que rien.
     batch_content = f"""@echo off
 :wait
 tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL
@@ -126,12 +131,27 @@ if not errorlevel 1 (
     timeout /t 1 /nobreak >NUL
     goto wait
 )
-move /Y "{new_exe_path}" "{current_exe}" >NUL
+set tries=0
+:trymove
+move /Y "{new_exe_path}" "{current_exe}" >NUL 2>&1
+if errorlevel 1 (
+    set /a tries+=1
+    if %tries% LSS 10 (
+        timeout /t 1 /nobreak >NUL
+        goto trymove
+    )
+)
 start "" "{current_exe}"
 del "%~f0"
 """
     batch_path = os.path.join(tempfile.gettempdir(), "station_sdr_update.bat")
-    with open(batch_path, "w", encoding="ascii") as f:
+    # "ascii" plante (UnicodeEncodeError) dès qu'un chemin contient un
+    # caractère accentué (nom d'utilisateur Windows, dossier...), ce qui
+    # empêchait silencieusement tout relancement. "mbcs" est l'encodage
+    # ANSI natif de Windows (plateforme cible de cet exécutable) et
+    # errors="replace" garantit qu'on écrit toujours le script plutôt
+    # que de lever une exception ici.
+    with open(batch_path, "w", encoding="mbcs", errors="replace") as f:
         f.write(batch_content)
 
     subprocess.Popen(
