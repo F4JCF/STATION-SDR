@@ -170,3 +170,13 @@ Le script installe `sdr_switch.py` (port 5006), fait recevoir à Direwolf
 le son de `rtl_fm` sur 144,800 MHz (sauvegarde : `/etc/direwolf.conf.avant-sdr`)
 et désactive le démarrage automatique des modules : au boot, c'est le
 dernier module choisi qui reprend la clé.
+
+## SvxLink : activité en direct
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_svxlink_api.sh | sudo bash
+```
+
+Installe `svxlink_api.py` (port 5007), qui suit `/var/log/svxlink` : émission,
+squelch, module actif, stations EchoLink connectées, journal d'activité et
+avertissements (saturation audio, annonces vocales manquantes).

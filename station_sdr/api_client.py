@@ -51,6 +51,14 @@ def get_aprs_stations(host: str, port: int) -> list:
     return resp.json()
 
 
+def get_svxlink_status(host: str, port: int) -> dict:
+    """Activité en direct de SvxLink (svxlink_api.py, /api/svxlink/status)."""
+    url = f"http://{host}:{port}/api/svxlink/status"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_ais_ships(host: str, port: int) -> dict:
     """Navires suivis par AIS-catcher (serveur web intégré, /api/ships.json).
     Réponse : {"count": N, "ships": [{"mmsi", "shipname", "lat", "lon",

@@ -459,15 +459,7 @@ class App(tk.Tk):
             "synchronisation) via une petite API, comme pour les autres services.",
         )
         self._build_ais_tab(self.pages["ais"])
-        self._build_info_tab(
-            self.pages["svxlink"], "SvxLink", "svxlink",
-            "Relais vocal radioamateur (répéteur logiciel, passerelle Echolink/\n"
-            "DMR/RoIP selon configuration) tournant sur le Pi.\n\n"
-            "Le statut ci-dessous reflète le service tel que rapporté par\n"
-            "station_api.py. Pour afficher ici l'activité en direct (dernier\n"
-            "indicatif entendu, nœuds Echolink connectés...), il faudrait exposer\n"
-            "ces informations via une petite API dédiée.",
-        )
+        self._build_svxlink_tab(self.pages["svxlink"])
 
         self.show_home()
 
@@ -587,6 +579,9 @@ class App(tk.Tk):
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
 
         self._current_view = key
+        if key == "svxlink" and not getattr(self, "_svx_poll_running", False):
+            self._svx_poll_running = True
+            self._svx_poll()
 
     def _clear(self, frame):
         for child in frame.winfo_children():
@@ -1669,6 +1664,232 @@ class App(tk.Tk):
         put("eta", eta_txt)
         put("level", None if num(s.get("level")) is None else f"{s['level']:.1f} dB")
         put("count", s.get("count"))
+
+    # ------------------------------------------------------------ SvxLink --
+
+    def _build_svxlink_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # --- En-tête : statut du service, indicatif, modules
+        head_outer = theme.card(wrapper)
+        head_outer.pack(fill="x", padx=12, pady=(8, 8))
+        head = head_outer.inner
+        head.configure(padding=14)
+        tk.Label(head, text="SvxLink / EchoLink", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+        pill = theme.pill(head, "INCONNU", theme.MUTED)
+        pill.pack(side="left", padx=(12, 0))
+        if not hasattr(self, "_info_status_pills"):
+            self._info_status_pills = {}
+        self._info_status_pills["svxlink"] = pill
+        self.svx_ident_label = tk.Label(head, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY)
+        self.svx_ident_label.pack(side="left", padx=(18, 0))
+        ttk.Button(
+            head, text="Redémarrer SvxLink", style="Flat.TButton",
+            command=lambda: self._restart_service(self._svx_service_key()),
+        ).pack(side="right")
+
+        # --- Voyants en direct
+        tiles = tk.Frame(wrapper, bg=theme.BG)
+        tiles.pack(fill="x", padx=6)
+        self.svx_tiles = {}
+        for i, (key, title) in enumerate((
+            ("tx", "ÉMISSION"), ("rx", "RÉCEPTION (squelch)"),
+            ("module", "MODULE ACTIF"), ("dir", "ANNUAIRE ECHOLINK"),
+        )):
+            tiles.grid_columnconfigure(i, weight=1, uniform="svx")
+            outer = theme.card(tiles)
+            outer.grid(row=0, column=i, sticky="nsew", padx=6, pady=(0, 8))
+            inner = outer.inner
+            inner.configure(padding=14)
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+            value = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 18, "bold"))
+            value.pack(anchor="w", pady=(4, 0))
+            sub = tk.Label(inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+            sub.pack(anchor="w")
+            self.svx_tiles[key] = (value, sub)
+
+        # --- Avertissements (masqués s'il n'y en a pas)
+        self.svx_warn_outer = theme.card(wrapper)
+        self.svx_warn_label = tk.Label(
+            self.svx_warn_outer.inner, text="", bg=theme.BG_CARD, fg=theme.ORANGE, font=theme.FONT_BODY,
+            justify="left", anchor="w", wraplength=1100,
+        )
+        self.svx_warn_label.pack(anchor="w", padx=14, pady=10)
+        self._svx_warn_shown = False
+
+        # --- Deux colonnes : stations connectées | journal d'activité
+        cols = tk.Frame(wrapper, bg=theme.BG)
+        cols.pack(fill="both", expand=True, padx=6, pady=(0, 12))
+        self.svx_cols = cols
+        cols.grid_columnconfigure(0, weight=1)
+        cols.grid_columnconfigure(1, weight=2)
+        cols.grid_rowconfigure(0, weight=1)
+
+        left_outer = theme.card(cols)
+        left_outer.grid(row=0, column=0, sticky="nsew", padx=6)
+        left = left_outer.inner
+        left.configure(padding=12)
+        tk.Label(left, text="Stations EchoLink connectées", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
+        self.svx_conn_tree = ttk.Treeview(left, columns=("call", "since"), show="headings", height=6)
+        self.svx_conn_tree.heading("call", text="Indicatif")
+        self.svx_conn_tree.heading("since", text="Connecté depuis")
+        self.svx_conn_tree.column("call", width=140, anchor="w")
+        self.svx_conn_tree.column("since", width=120, anchor="center")
+        self.svx_conn_tree.pack(fill="both", expand=True, pady=(8, 8))
+        self.svx_last_label = tk.Label(
+            left, text="Dernière station : —", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, anchor="w",
+        )
+        self.svx_last_label.pack(anchor="w")
+
+        right_outer = theme.card(cols)
+        right_outer.grid(row=0, column=1, sticky="nsew", padx=6)
+        right = right_outer.inner
+        right.configure(padding=12)
+        tk.Label(right, text="Journal d'activité", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
+        self.svx_events_tree = ttk.Treeview(right, columns=("time", "event"), show="headings", height=12)
+        self.svx_events_tree.heading("time", text="Heure")
+        self.svx_events_tree.heading("event", text="Événement")
+        self.svx_events_tree.column("time", width=130, anchor="center")
+        self.svx_events_tree.column("event", width=420, anchor="w")
+        vsb = ttk.Scrollbar(right, orient="vertical", command=self.svx_events_tree.yview)
+        self.svx_events_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y", pady=(8, 0))
+        self.svx_events_tree.pack(fill="both", expand=True, pady=(8, 0))
+
+        self._svx_poll_running = False
+
+    def _svx_service_key(self):
+        """Clé exacte du service SvxLink dans station_api.py (inconnue à
+        l'avance), retrouvée par son nom ; "svxlink" par défaut."""
+        for key, info in (getattr(self, "_last_services", None) or {}).items():
+            label = str(info.get("label", key)).lower()
+            if "svx" in key.lower() or "svx" in label:
+                return key
+        return "svxlink"
+
+    def _svx_poll(self):
+        """Rafraîchissement rapide (2 s) tant que la page SvxLink est
+        affichée, pour que les voyants émission / réception suivent le
+        trafic en direct ; le reste de l'appli garde son rythme normal."""
+        if getattr(self, "_current_view", None) != "svxlink":
+            self._svx_poll_running = False
+            return
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_svxlink", 5007)
+        threading.Thread(
+            target=self._fetch, args=(lambda: api_client.get_svxlink_status(host, port), self._render_svxlink),
+            daemon=True,
+        ).start()
+        self.after(2000, self._svx_poll)
+
+    @staticmethod
+    def _svx_clock(t):
+        if not t:
+            return "—"
+        lt = time.localtime(t)
+        if time.strftime("%Y%m%d", lt) == time.strftime("%Y%m%d"):
+            return time.strftime("%H:%M:%S", lt)
+        return time.strftime("%d/%m %H:%M", lt)
+
+    @staticmethod
+    def _svx_duration(seconds):
+        seconds = max(0, int(seconds))
+        if seconds < 60:
+            return f"{seconds} s"
+        if seconds < 3600:
+            return f"{seconds // 60} min {seconds % 60:02d} s"
+        return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
+
+    def _render_svxlink(self, data, error):
+        if not hasattr(self, "svx_tiles"):
+            return
+        if error:
+            for value, sub in self.svx_tiles.values():
+                value.config(text="—", fg=theme.MUTED)
+                sub.config(text="")
+            self.svx_ident_label.config(
+                text="Activité indisponible — svxlink-api est-il installé sur le Pi ?", fg=theme.RED,
+            )
+            return
+
+        now = data.get("now") or time.time()
+        call = data.get("callsign") or "—"
+        modules = ", ".join(data.get("modules") or []) or "—"
+        logic = ", ".join(data.get("logics") or []) or "—"
+        self.svx_ident_label.config(text=f"{call}   ·   {logic}   ·   Modules : {modules}", fg=theme.MUTED)
+
+        value, sub = self.svx_tiles["tx"]
+        if data.get("tx"):
+            value.config(text="EN ÉMISSION", fg=theme.RED)
+            sub.config(text=f"depuis {self._svx_duration(now - (data.get('tx_since') or now))}")
+        else:
+            value.config(text="Repos", fg=theme.TEXT)
+            last = data.get("last_tx") or {}
+            sub.config(text=f"dernière : {self._svx_clock(last.get('end'))}" if last else "aucune émission récente")
+
+        value, sub = self.svx_tiles["rx"]
+        if data.get("squelch"):
+            value.config(text="SIGNAL REÇU", fg=theme.GREEN)
+            sub.config(text=f"depuis {self._svx_duration(now - (data.get('squelch_since') or now))}")
+        else:
+            value.config(text="Fermé", fg=theme.TEXT)
+            last = data.get("last_rx") or {}
+            sub.config(text=f"dernière : {self._svx_clock(last.get('end'))}" if last else "aucune réception récente")
+
+        value, sub = self.svx_tiles["module"]
+        mod = data.get("active_module")
+        value.config(text=mod or "Aucun", fg=theme.ACCENT if mod else theme.TEXT)
+        sub.config(text="activé par DTMF" if mod else "logique au repos")
+
+        value, sub = self.svx_tiles["dir"]
+        d = data.get("echolink_directory")
+        value.config(
+            text={"ON": "Connecté", "OFF": "Déconnecté"}.get(d, d or "—"),
+            fg=theme.GREEN if d == "ON" else (theme.RED if d == "OFF" else theme.MUTED),
+        )
+        sub.config(text=f"{len(data.get('connected') or [])} station(s) en QSO")
+
+        # Stations connectées
+        self.svx_conn_tree.delete(*self.svx_conn_tree.get_children())
+        for st in data.get("connected") or []:
+            self.svx_conn_tree.insert(
+                "", "end", values=(st.get("callsign"), self._svx_duration(now - (st.get("since") or now))),
+            )
+        last = data.get("last_station")
+        self.svx_last_label.config(
+            text=f"Dernière station : {last}  ({self._svx_clock(data.get('last_station_at'))})" if last
+            else "Dernière station : —",
+        )
+
+        # Journal (le plus récent en haut)
+        self.svx_events_tree.delete(*self.svx_events_tree.get_children())
+        for ev in data.get("events") or []:
+            self.svx_events_tree.insert("", "end", values=(self._svx_clock(ev.get("time")), ev.get("text", "")))
+
+        # Avertissements
+        warnings = []
+        if not data.get("log_found", True):
+            warnings.append("⚠ Journal /var/log/svxlink introuvable : l'activité ne peut pas être suivie.")
+        dist_at = data.get("distortion_at")
+        if dist_at and now - dist_at < 24 * 3600:
+            warnings.append(
+                f"⚠ Entrée audio saturée (« Distortion detected », dernière fois {self._svx_clock(dist_at)}) : "
+                "baissez le niveau d'entrée de la carte son (alsamixer, réglage Capture) jusqu'à ce que le message disparaisse."
+            )
+        if data.get("missing_audio_count"):
+            warnings.append(
+                f"⚠ {data['missing_audio_count']} annonce(s) vocale(s) introuvable(s) : le pack de voix de SvxLink "
+                "n'est pas installé ou ne correspond pas à la langue configurée — l'identification vocale reste muette."
+            )
+        if warnings:
+            self.svx_warn_label.config(text="\n".join(warnings))
+            if not self._svx_warn_shown:
+                self.svx_warn_outer.pack(fill="x", padx=12, pady=(0, 8), before=self.svx_cols)
+                self._svx_warn_shown = True
+        elif self._svx_warn_shown:
+            self.svx_warn_outer.pack_forget()
+            self._svx_warn_shown = False
 
     # ------------------------------------------------- Pages informatives --
 

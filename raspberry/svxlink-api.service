@@ -1,0 +1,15 @@
+[Unit]
+Description=API JSON de l'activite SvxLink (lecture du journal)
+After=network-online.target svxlink.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=SVXLINK_API_PORT=5007
+ExecStart=/usr/bin/python3 /usr/local/bin/svxlink_api.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
