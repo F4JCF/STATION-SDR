@@ -387,8 +387,16 @@ class App(tk.Tk):
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
-        outer = theme.card(wrapper)
-        outer.pack(fill="x", padx=12, pady=12)
+        # Colonne de gauche (infos + boutons de calque, largeur naturelle)
+        # et colonne de droite (carte), qui occupe tout le reste en largeur
+        # ET en hauteur — plutôt qu'empiler les deux verticalement, ce qui
+        # laissait la carte étriquée en bas avec un grand vide à droite des
+        # infos.
+        left_col = tk.Frame(wrapper, bg=theme.BG)
+        left_col.pack(side="left", fill="y", padx=(0, 8), pady=12)
+
+        outer = theme.card(left_col)
+        outer.pack(fill="x")
         inner = outer.inner
         inner.configure(padding=16)
 
@@ -420,30 +428,32 @@ class App(tk.Tk):
 
         self.weather_metar_label = tk.Label(
             inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_MONO,
-            wraplength=820, justify="left",
+            wraplength=420, justify="left",
         )
-        self.weather_metar_label.grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 0))
+        self.weather_metar_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(14, 0))
 
-        overlay_row = tk.Frame(wrapper, bg=theme.BG)
-        overlay_row.pack(fill="x", padx=12, pady=(0, 6))
+        overlay_row = tk.Frame(left_col, bg=theme.BG)
+        overlay_row.pack(fill="x", pady=(8, 0))
         tk.Label(
             overlay_row, text="Carte en direct :", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-        ).pack(side="left", padx=(0, 8))
+        ).pack(anchor="w")
+        buttons_row = tk.Frame(overlay_row, bg=theme.BG)
+        buttons_row.pack(fill="x", pady=(4, 0))
         self._weather_overlay_buttons = {}
         for key, label in (("none", "Aucune"), ("radar", "Radar pluie")):
             btn = ttk.Button(
-                overlay_row, text=label, style="Flat.TButton",
+                buttons_row, text=label, style="Flat.TButton",
                 command=lambda k=key: self._set_weather_overlay(k),
             )
-            btn.pack(side="left", padx=4)
+            btn.pack(side="left", padx=(0, 4))
             self._weather_overlay_buttons[key] = btn
         self.weather_overlay_label = tk.Label(
-            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8),
+            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=240, justify="left",
         )
-        self.weather_overlay_label.pack(side="left", padx=12)
+        self.weather_overlay_label.pack(anchor="w", pady=(4, 0))
 
         map_outer = theme.card(wrapper)
-        map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        map_outer.pack(side="left", fill="both", expand=True, pady=12, padx=(0, 12))
         self.weather_map = TkinterMapView(map_outer.inner, corner_radius=0)
         self.weather_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
