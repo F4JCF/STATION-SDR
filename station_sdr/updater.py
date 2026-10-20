@@ -42,17 +42,32 @@ def _parse_version(tag: str) -> tuple:
     return tuple(parts) if parts else (0,)
 
 
+class PrivateRepoAuthRequired(Exception):
+    """Le dépôt est privé et aucun jeton GitHub valide n'a été fourni :
+    impossible de distinguer "pas de mise à jour" de "accès refusé",
+    donc on le signale explicitement plutôt que de dire silencieusement
+    que la version est à jour."""
+
+
 def check_for_update(github_token: str = "") -> dict | None:
     """Retourne les infos de la release si une mise à jour est disponible,
-    sinon None. Lève requests.RequestException en cas d'échec réseau/API
-    (laissé à l'appelant de décider s'il affiche une erreur ou se tait)."""
+    sinon None. Lève requests.RequestException en cas d'échec réseau/API,
+    et PrivateRepoAuthRequired si le dépôt répond 404 sans jeton configuré
+    (laissé à l'appelant de décider comment l'afficher)."""
     headers = {"Accept": "application/vnd.github+json"}
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
     resp = requests.get(API_LATEST_RELEASE, headers=headers, timeout=TIMEOUT)
     if resp.status_code == 404:
-        # Dépôt privé sans jeton valide, ou pas encore de release publiée
+        if not github_token:
+            raise PrivateRepoAuthRequired(
+                "Le dépôt F4JCF/STATION-SDR est privé : renseignez un jeton "
+                "GitHub dans Paramètres pour que la vérification de mise à "
+                "jour fonctionne."
+            )
+        # Jeton fourni mais toujours 404 : probablement aucune release
+        # publiée pour l'instant.
         return None
     resp.raise_for_status()
     data = resp.json()

@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 import requests
+from PIL import Image, ImageDraw, ImageTk
 from tkintermapview import TkinterMapView
 
 from . import api_client, theme, updater
@@ -48,6 +49,53 @@ def _kt_to_kmh(value):
 
 def _fmt(value):
     return value if value not in (None, "") else "—"
+
+
+def _alt_color(alt_ft):
+    """Couleur par tranche d'altitude, dans l'esprit du dégradé de tar1090."""
+    try:
+        alt = float(alt_ft)
+    except (TypeError, ValueError):
+        return "#8b96a5"  # altitude inconnue / au sol
+    if alt < 5000:
+        return "#f85149"
+    if alt < 15000:
+        return "#d29922"
+    if alt < 25000:
+        return "#3fb950"
+    if alt < 35000:
+        return "#4aa3ff"
+    return "#b15bff"
+
+
+_PLANE_ICON_CACHE = {}
+
+
+def _plane_icon(alt_ft, track, size=22):
+    """Icône avion (triangle simple) colorée par altitude et orientée selon
+    le cap. Mise en cache par (couleur, cap arrondi) pour éviter de
+    regénérer une image à chaque rafraîchissement."""
+    color = _alt_color(alt_ft)
+    try:
+        heading = round(float(track)) % 360
+    except (TypeError, ValueError):
+        heading = 0
+    cache_key = (color, heading)
+    cached = _PLANE_ICON_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(base)
+    cx = size / 2
+    draw.polygon(
+        [(cx, 1), (size - 2, size - 4), (cx, size - 9), (2, size - 4)],
+        fill=color, outline="#0b0f17",
+    )
+    rotated = base.rotate(-heading, resample=Image.BICUBIC, expand=False)
+    photo = ImageTk.PhotoImage(rotated)
+    _PLANE_ICON_CACHE[cache_key] = photo
+    return photo
 
 
 class App(tk.Tk):
@@ -381,9 +429,9 @@ class App(tk.Tk):
         self.aircraft_count_label.pack(anchor="w", padx=12, pady=(8, 6))
 
         table_outer = theme.card(wrapper)
-        table_outer.pack(fill="both", padx=12, pady=(0, 8))
+        table_outer.pack(fill="x", padx=12, pady=(0, 8))
         columns = ("flight", "hex", "alt", "gs", "track", "squawk")
-        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=7)
+        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=4)
         headings = {
             "flight": "Indicatif", "hex": "Hex", "alt": "Altitude (ft)",
             "gs": "Vitesse (kt)", "track": "Cap (°)", "squawk": "Squawk",
@@ -393,6 +441,12 @@ class App(tk.Tk):
             self.aircraft_tree.column(col, width=130, anchor="center")
         self.aircraft_tree.pack(fill="both", expand=True, padx=1, pady=1)
 
+        self.aircraft_detail_label = tk.Label(
+            wrapper, text="Cliquez un avion sur la carte pour voir son détail.",
+            bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=theme.FONT_BODY, anchor="w", padx=10, pady=6,
+        )
+        self.aircraft_detail_label.pack(fill="x", padx=12, pady=(0, 8))
+
         map_outer = theme.card(wrapper)
         map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.aircraft_map = TkinterMapView(map_outer.inner, corner_radius=0)
@@ -400,6 +454,17 @@ class App(tk.Tk):
         lat, lon = DEFAULT_COORDS
         self.aircraft_map.set_position(lat, lon)
         self.aircraft_map.set_zoom(8)
+        self._aircraft_icon_refs = []
+
+    def _show_aircraft_detail(self, marker):
+        ac = marker.data
+        flight = (ac.get("flight") or "").strip() or ac.get("hex", "—")
+        self.aircraft_detail_label.config(
+            text=(
+                f"{flight} — hex {ac.get('hex', '—')} · altitude {ac.get('alt_baro', '—')} ft · "
+                f"vitesse {ac.get('gs', '—')} kt · cap {ac.get('track', '—')}° · squawk {ac.get('squawk', '—')}"
+            ),
+        )
 
     def _render_aircraft(self, data, error):
         if error:
@@ -418,6 +483,8 @@ class App(tk.Tk):
         for item in self.aircraft_tree.get_children():
             self.aircraft_tree.delete(item)
         self.aircraft_map.delete_all_marker()
+        self._aircraft_icon_refs = []
+
         for ac in aircraft:
             flight = (ac.get("flight") or "").strip() or "—"
             self.aircraft_tree.insert(
@@ -429,8 +496,12 @@ class App(tk.Tk):
             )
             lat, lon = ac.get("lat"), ac.get("lon")
             if lat is not None and lon is not None:
-                alt = ac.get("alt_baro", "—")
-                self.aircraft_map.set_marker(lat, lon, text=f"{flight} · {alt} ft")
+                icon = _plane_icon(ac.get("alt_baro"), ac.get("track"))
+                self._aircraft_icon_refs.append(icon)
+                self.aircraft_map.set_marker(
+                    lat, lon, text=flight, icon=icon, icon_anchor="center",
+                    data=ac, command=self._show_aircraft_detail,
+                )
 
     # ----------------------------------------------------------- APRS --
 
@@ -688,6 +759,9 @@ class App(tk.Tk):
         token = self.config_data.get("github_token", "")
         try:
             info = updater.check_for_update(token)
+        except updater.PrivateRepoAuthRequired as exc:
+            self.after(0, self._prompt_missing_token, str(exc))
+            return
         except requests.RequestException as exc:
             if not silent:
                 self.after(0, messagebox.showerror, "Mise à jour",
@@ -700,6 +774,11 @@ class App(tk.Tk):
             return
 
         self.after(0, self._prompt_update, info, token)
+
+    def _prompt_missing_token(self, message: str):
+        answer = messagebox.askyesno("Mise à jour", f"{message}\n\nOuvrir les Paramètres maintenant ?")
+        if answer:
+            self._open_settings()
 
     def _prompt_update(self, info: dict, token: str):
         answer = messagebox.askyesno(
