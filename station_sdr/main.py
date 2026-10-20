@@ -874,6 +874,13 @@ class App(tk.Tk):
         )
         self.aircraft_count_label.pack(side="left")
 
+        ttk.Button(
+            top_row, text="Carte web tar1090", style="Flat.TButton",
+            command=lambda: self._open_url(
+                f"http://{self.config_data.get('pi_host', '192.168.1.229')}:{self.config_data.get('port_adsb', 8504)}/"
+            ),
+        ).pack(side="right", padx=(8, 0))
+
         search_box = tk.Frame(top_row, bg=theme.BG)
         search_box.pack(side="right")
         tk.Label(
@@ -1197,6 +1204,10 @@ class App(tk.Tk):
             status_inner, text="Redémarrer Direwolf", style="Flat.TButton",
             command=lambda: self._restart_service("direwolf"),
         ).pack(side="right")
+        ttk.Button(
+            status_inner, text="Carte aprs.fi (F4JCF-10)", style="Flat.TButton",
+            command=lambda: self._open_url("https://aprs.fi/#!call=a%2FF4JCF-10&timerange=3600&tail=3600"),
+        ).pack(side="right", padx=(0, 8))
 
         self.aprs_count_label = tk.Label(
             wrapper, text="Stations entendues : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
