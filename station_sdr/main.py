@@ -392,6 +392,7 @@ class App(tk.Tk):
         self._last_services = {}
 
         theme.apply_dark_theme(self)
+        self._alert_init()
         self._build_menu()
         self._build_header()
         self._build_body()
@@ -410,6 +411,11 @@ class App(tk.Tk):
         app_menu = tk.Menu(menubar, tearoff=0)
         app_menu.add_command(label="Paramètres...", command=self._open_settings)
         app_menu.add_command(label="Vérifier les mises à jour", command=self._manual_update_check)
+        app_menu.add_separator()
+        self._alert_sound_var = tk.BooleanVar(value=self.config_data.get("alert_sound", True))
+        app_menu.add_checkbutton(label="Alertes sonores", variable=self._alert_sound_var,
+                                 command=self._toggle_alert_sound)
+        app_menu.add_command(label="Historique des alertes", command=self._show_alert_history)
         app_menu.add_separator()
         app_menu.add_command(label="Quitter", command=self._on_close)
         menubar.add_cascade(label="STATION-SDR", menu=app_menu)
@@ -468,6 +474,14 @@ class App(tk.Tk):
         self.chip_health = theme.chip(strip, "Pi : —")
         self.chip_health.pack(side="left", padx=8)
         self.chip_health.bind("<Button-1>", lambda _e: self.show_page("health"))
+        self.chip_alerts = theme.chip(strip, "Alertes : 0")
+        self.chip_alerts.pack(side="left", padx=8)
+        self.chip_alerts.bind("<Button-1>", lambda _e: self._show_alert_history())
+        try:
+            self.chip_alerts.configure(cursor="hand2")
+            self.chip_health.configure(cursor="hand2")
+        except tk.TclError:
+            pass
         self.chip_updated = theme.chip(strip, "Maj : —")
         self.chip_updated.pack(side="right")
 
@@ -675,6 +689,7 @@ class App(tk.Tk):
             lambda: api_client.get_system_health(host, cfg.get("port_sdr_switch", 5006)), self._render_health,
         )
         self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
+        self._fetch(lambda: api_client.get_aprs_packets(host, cfg["port_aprs"]), self._render_aprs_packets)
         self._fetch(lambda: api_client.get_ais_ships(host, cfg.get("port_ais", 8100)), self._render_ais)
         self._fetch(
             lambda: api_client.get_sdr_mode(host, cfg.get("port_sdr_switch", 5006)), self._render_sdr_mode,
@@ -1187,6 +1202,7 @@ class App(tk.Tk):
         self._aircraft_trails = new_trails
 
         self.aircraft_count_label.config(text=f"Avions détectés : {len(aircraft)}")
+        self._check_aircraft_alerts(aircraft)
         if "aircraft" in self.tile_chips:
             self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)")
         self.chip_aircraft.config(text=f"Avions : {len(aircraft)}")
@@ -1579,6 +1595,7 @@ class App(tk.Tk):
 
         ships = data.get("ships", []) if isinstance(data, dict) else []
         self._ais_ships = ships
+        self._check_ais_alerts(ships)
         self._ais_by_mmsi = {s.get("mmsi"): s for s in ships}
         station = data.get("station") if isinstance(data, dict) else None
         if isinstance(station, dict):
@@ -1950,6 +1967,194 @@ class App(tk.Tk):
         elif self._svx_warn_shown:
             self.svx_warn_outer.pack_forget()
             self._svx_warn_shown = False
+
+    # ------------------------------------------------------------ Alertes --
+
+    SQUAWK_ALERTS = {
+        "7700": "Détresse (urgence générale)",
+        "7600": "Panne radio",
+        "7500": "Intrusion illicite (détournement)",
+    }
+
+    def _alert_init(self):
+        self._alerts = []                 # historique (plus récent en premier)
+        self._alert_seen = {}             # clé -> horodatage du dernier signalement
+        self._alert_window = None
+        self._alert_started = time.time()
+
+    def _raise_alert(self, key, title, text, cooldown=1800):
+        """Signale un événement de sécurité : fenêtre au premier plan, son,
+        pastille dans le bandeau et historique. Une même alerte (même clé)
+        n'est re-signalée qu'après `cooldown` secondes."""
+        now = time.time()
+        last = self._alert_seen.get(key)
+        self._alert_seen[key] = now
+        if last is not None and now - last < cooldown:
+            return
+        self._alerts.insert(0, {"time": now, "title": title, "text": text})
+        del self._alerts[100:]
+        self._update_alert_chip()
+        if self.config_data.get("alert_sound", True):
+            self._alert_sound()
+        self._show_alert_popup(title, text)
+
+    def _alert_sound(self):
+        def play():
+            try:
+                import winsound
+                for _ in range(3):
+                    winsound.Beep(1200, 250)
+                    winsound.Beep(800, 250)
+            except Exception:
+                try:
+                    self.after(0, self.bell)
+                except Exception:
+                    pass
+        threading.Thread(target=play, daemon=True).start()
+
+    def _show_alert_popup(self, title, text):
+        win = tk.Toplevel(self)
+        win.title(f"Alerte — {title}")
+        win.configure(bg=theme.BG_CARD)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        head = tk.Frame(win, bg=theme.RED)
+        head.pack(fill="x")
+        tk.Label(head, text=f"⚠  {title}", bg=theme.RED, fg="#0b0f17", font=("Segoe UI", 14, "bold"),
+                 padx=16, pady=10).pack(anchor="w")
+        tk.Label(win, text=text, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY, justify="left",
+                 wraplength=460, padx=16, pady=14).pack(anchor="w")
+        tk.Label(win, text=time.strftime("Le %d/%m/%Y à %H:%M:%S"), bg=theme.BG_CARD, fg=theme.MUTED,
+                 font=theme.FONT_SUBTITLE, padx=16).pack(anchor="w")
+        row = tk.Frame(win, bg=theme.BG_CARD)
+        row.pack(fill="x", padx=16, pady=14)
+        ttk.Button(row, text="OK", style="Accent.TButton", command=win.destroy).pack(side="right")
+        ttk.Button(row, text="Historique des alertes", style="Flat.TButton",
+                   command=lambda: (win.destroy(), self._show_alert_history())).pack(side="right", padx=(0, 8))
+        self._alert_popups = [w for w in getattr(self, "_alert_popups", []) if w.winfo_exists()] + [win]
+        offset = (len(self._alert_popups) - 1) * 36
+        win.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2 + offset
+        y = self.winfo_rooty() + 120 + offset
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        try:
+            win.lift()
+            win.focus_force()
+        except tk.TclError:
+            pass
+
+    def _update_alert_chip(self):
+        recent = [a for a in self._alerts if time.time() - a["time"] < 24 * 3600]
+        if recent:
+            self.chip_alerts.config(text=f" ⚠ Alertes : {len(recent)} ", bg=theme.RED, fg="#0b0f17")
+        else:
+            self.chip_alerts.config(text=" Alertes : 0 ", bg=theme.BG_CARD_ALT, fg=theme.TEXT)
+
+    def _show_alert_history(self):
+        if self._alert_window is not None and self._alert_window.winfo_exists():
+            self._alert_window.lift()
+            return
+        win = tk.Toplevel(self)
+        self._alert_window = win
+        win.title("Historique des alertes")
+        win.configure(bg=theme.BG)
+        win.geometry("760x420")
+        tree = ttk.Treeview(win, columns=("time", "title", "text"), show="headings")
+        for col, txt, w in (("time", "Date", 120), ("title", "Alerte", 200), ("text", "Détail", 420)):
+            tree.heading(col, text=txt)
+            tree.column(col, width=w, anchor="w")
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+        for a in self._alerts:
+            tree.insert("", "end", values=(time.strftime("%d/%m %H:%M:%S", time.localtime(a["time"])),
+                                           a["title"], a["text"].replace("\n", " · ")))
+        if not self._alerts:
+            tree.insert("", "end", values=("", "Aucune alerte depuis le lancement", ""))
+
+    def _toggle_alert_sound(self):
+        self.config_data["alert_sound"] = bool(self._alert_sound_var.get())
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+
+    # -- Détections
+
+    def _check_aircraft_alerts(self, aircraft):
+        for ac in aircraft:
+            sq = str(ac.get("squawk") or "").strip()
+            if sq in self.SQUAWK_ALERTS:
+                hx = ac.get("hex", "?")
+                call = (ac.get("flight") or "").strip() or hx.upper()
+                alt = ac.get("alt_baro")
+                pos = ""
+                if ac.get("lat") is not None and ac.get("lon") is not None:
+                    pos = f"\nPosition : {ac['lat']:.4f}, {ac['lon']:.4f}"
+                self._raise_alert(
+                    f"squawk:{hx}:{sq}", f"Squawk {sq} — {call}",
+                    f"L'avion {call} (hex {hx}) affiche le code transpondeur {sq} : "
+                    f"{self.SQUAWK_ALERTS[sq]}.\nAltitude : {alt if alt is not None else '—'} ft{pos}",
+                )
+            if ac.get("emergency") not in (None, "", "none") and sq not in self.SQUAWK_ALERTS:
+                hx = ac.get("hex", "?")
+                call = (ac.get("flight") or "").strip() or hx.upper()
+                self._raise_alert(
+                    f"emerg:{hx}:{ac.get('emergency')}", f"Urgence ADS-B — {call}",
+                    f"L'avion {call} (hex {hx}) signale un état d'urgence : {ac.get('emergency')}.",
+                )
+
+    def _check_ais_alerts(self, ships):
+        for s in ships:
+            mmsi = s.get("mmsi")
+            try:
+                m = int(mmsi)
+            except (TypeError, ValueError):
+                continue
+            kind = None
+            if 970000000 <= m <= 970999999 or s.get("shipclass") == 13:
+                kind = "Balise SART (radeau / naufragé)"
+            elif 972000000 <= m <= 972999999:
+                kind = "Balise homme à la mer (MOB)"
+            elif 974000000 <= m <= 974999999:
+                kind = "Balise de détresse EPIRB"
+            elif s.get("status") == 14:
+                kind = "Signal SART actif"
+            if kind:
+                pos = ""
+                if isinstance(s.get("lat"), (int, float)) and isinstance(s.get("lon"), (int, float)):
+                    pos = f"\nPosition : {s['lat']:.4f}, {s['lon']:.4f}"
+                    if isinstance(s.get("distance"), (int, float)):
+                        pos += f"  ({s['distance']:.1f} NM)"
+                self._raise_alert(
+                    f"ais:{m}", f"AIS — {kind}",
+                    f"Émission AIS de détresse reçue : MMSI {m}.{pos}\n"
+                    "Une balise SART/EPIRB/MOB peut aussi être en test : vérifiez avant d'alerter.",
+                    cooldown=3600,
+                )
+
+    def _render_aprs_packets(self, data, error):
+        if error or not isinstance(data, list):
+            return
+        mycall = str(self.config_data.get("aprs_callsign", "F4JCF")).upper()
+        for p in data:
+            raw = str(p.get("raw") or "")
+            if len(raw) < 11 or raw[0] != ":" or raw[10] != ":":
+                continue
+            addressee = raw[1:10].strip().upper()
+            if addressee.split("-")[0] != mycall:
+                continue
+            body = raw[11:]
+            if body.startswith(("ack", "rej")):
+                continue
+            msg, _, msg_id = body.partition("{")
+            heard = p.get("last_heard") or time.time()
+            if heard < self._alert_started - 1800:
+                continue
+            src = p.get("callsign", "?")
+            self._raise_alert(
+                f"aprsmsg:{src}:{msg_id or msg}", f"Message APRS de {src}",
+                f"Pour {addressee} : {msg.strip()}\nReçu à {time.strftime('%H:%M:%S', time.localtime(heard))}",
+                cooldown=24 * 3600,
+            )
 
     # ------------------------------------------------- Pages informatives --
 

@@ -103,6 +103,15 @@ def get_sdr_mode(host: str, port: int) -> dict:
     return resp.json()
 
 
+def get_aprs_packets(host: str, port: int) -> list:
+    """Derniers paquets APRS bruts (aprs_api.py) : sert à repérer les
+    messages adressés à la station."""
+    url = f"http://{host}:{port}/api/aprs/packets"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def restart_service(host: str, port: int, key: str) -> dict:
     """Demande le redémarrage d'un service via station_api.py (POST)."""
     url = f"http://{host}:{port}/api/services/{key}/restart"
