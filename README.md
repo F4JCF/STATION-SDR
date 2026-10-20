@@ -11,10 +11,54 @@ Tableau de bord Windows pour le Raspberry Pi multi-fonctions **F4JCF-SDR-STATION
   readsb, gestionnaire SDR, SvxLink (`station_api.py`, port 5003)
 - **Récepteurs SDR** — quel récepteur est utilisé par quelle fonction
   (`sdr_manager.py`, port 5002)
+- **APRS** — stations entendues (position, distance/direction, commentaire)
+  décodées depuis le flux KISS de Direwolf (`aprs_api.py`, port 5004 — voir
+  ci-dessous pour le déployer sur le Pi) + état du service avec redémarrage
+- **Winlink** — module informatif : non installé sur le Raspberry pour
+  l'instant
 - **Mise à jour automatique** — au démarrage, l'application vérifie s'il existe
   une version plus récente sur GitHub (Releases) et propose de l'installer
 
-Rafraîchissement automatique toutes les 15 secondes (réglable).
+Écran d'accueil en vignettes cliquables, une par module. Rafraîchissement
+automatique toutes les 15 secondes (réglable).
+
+## Déployer le module APRS sur le Raspberry Pi
+
+Le dossier `raspberry/` contient le service à installer sur
+**F4JCF-SDR-STATION** pour que l'onglet APRS affiche les stations
+réellement entendues par Direwolf (sans ça, l'onglet affiche juste l'état
+du service Direwolf, sans liste de stations) :
+
+1. Copier les deux fichiers sur le Pi (remplacer `F4JCF-SDR-STATION` par
+   son IP si besoin) :
+   ```
+   scp raspberry/aprs_api.py f4jcf@F4JCF-SDR-STATION:/home/f4jcf/
+   scp raspberry/aprs-api.service f4jcf@F4JCF-SDR-STATION:/tmp/
+   ```
+2. Se connecter en SSH sur le Pi, installer Flask si nécessaire, puis
+   installer et démarrer le service :
+   ```
+   pip3 install flask --break-system-packages   # si pas déjà installé
+   sudo mv /tmp/aprs-api.service /etc/systemd/system/aprs-api.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now aprs-api
+   sudo systemctl status aprs-api
+   ```
+3. Vérifier que ça décode bien quelque chose :
+   ```
+   curl http://localhost:5004/api/aprs/health
+   curl http://localhost:5004/api/aprs/stations
+   ```
+
+Par défaut, `aprs_api.py` se connecte au port KISS TCP `8001` de Direwolf
+en local (`127.0.0.1`). Si votre `direwolf.conf` utilise un autre port
+(ligne `KISSPORT`), ajuster la variable d'environnement
+`DIREWOLF_KISS_PORT` dans `aprs-api.service` avant de l'installer.
+
+Le décodeur reconnaît les paquets de position APRS au format
+non-compressé (le plus courant). Les formats Mic-E et position compressée
+ne sont pas décodés pour l'instant : ces stations apparaîtront comme
+entendues mais sans position sur la carte.
 
 ## Installation
 

@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "port_adsb": 8504,
     "port_services": 5003,
     "port_sdr": 5002,
+    "port_aprs": 5004,
     "refresh_seconds": 15,
     "check_updates": True,
     # Jeton GitHub personnel (optionnel). Nécessaire uniquement si le

@@ -1,0 +1,18 @@
+[Unit]
+Description=API JSON des paquets APRS decodes depuis Direwolf (KISS TCP)
+After=network-online.target direwolf.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=f4jcf
+WorkingDirectory=/home/f4jcf
+Environment=DIREWOLF_HOST=127.0.0.1
+Environment=DIREWOLF_KISS_PORT=8001
+Environment=APRS_API_PORT=5004
+ExecStart=/usr/bin/python3 /home/f4jcf/aprs_api.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

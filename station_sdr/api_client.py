@@ -43,6 +43,14 @@ def get_sdr_status(host: str, port: int) -> dict:
     return resp.json()
 
 
+def get_aprs_stations(host: str, port: int) -> list:
+    """Interroge /api/aprs/stations sur aprs_api.py (décodage Direwolf)."""
+    url = f"http://{host}:{port}/api/aprs/stations"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def restart_service(host: str, port: int, key: str) -> dict:
     """Demande le redémarrage d'un service via station_api.py (POST)."""
     url = f"http://{host}:{port}/api/services/{key}/restart"

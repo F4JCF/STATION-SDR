@@ -243,6 +243,7 @@ class App(tk.Tk):
         self._fetch(lambda: api_client.get_aircraft(host, cfg["port_adsb"]), self._render_aircraft)
         self._fetch(lambda: api_client.get_services_status(host, cfg["port_services"]), self._render_services)
         self._fetch(lambda: api_client.get_sdr_status(host, cfg["port_sdr"]), self._render_sdr)
+        self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
 
@@ -437,30 +438,84 @@ class App(tk.Tk):
         wrapper = tk.Frame(frame, bg=theme.BG)
         wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
-        outer = theme.card(wrapper)
-        outer.pack(fill="x", padx=12, pady=12)
-        inner = outer.inner
-        inner.configure(padding=18)
+        status_outer = theme.card(wrapper)
+        status_outer.pack(fill="x", padx=12, pady=12)
+        status_inner = status_outer.inner
+        status_inner.configure(padding=16)
 
         tk.Label(
-            inner, text="APRS (Direwolf)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
-        ).pack(anchor="w")
-        self.aprs_badge = theme.pill(inner, "INCONNU", theme.MUTED)
-        self.aprs_badge.pack(anchor="w", pady=(10, 14))
-
-        tk.Label(
-            inner,
-            text="Aucune API de décodage des paquets n'est exposée pour l'instant sur le\n"
-                 "Raspberry : ce module affiche l'état du service Direwolf (le TNC logiciel\n"
-                 "qui décode l'APRS reçu par SDR). Pour afficher ici les stations et les\n"
-                 "paquets reçus, il faudra exposer une API dédiée sur le Pi.",
-            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left",
-        ).pack(anchor="w")
-
+            status_inner, text="APRS (Direwolf)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
+        ).pack(side="left")
+        self.aprs_badge = theme.pill(status_inner, "INCONNU", theme.MUTED)
+        self.aprs_badge.pack(side="left", padx=(12, 0))
         ttk.Button(
-            inner, text="Redémarrer Direwolf", style="Flat.TButton",
+            status_inner, text="Redémarrer Direwolf", style="Flat.TButton",
             command=lambda: self._restart_service("direwolf"),
-        ).pack(anchor="w", pady=(14, 0))
+        ).pack(side="right")
+
+        self.aprs_count_label = tk.Label(
+            wrapper, text="Stations entendues : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
+        )
+        self.aprs_count_label.pack(anchor="w", padx=12, pady=(4, 6))
+
+        table_outer = theme.card(wrapper)
+        table_outer.pack(fill="both", padx=12, pady=(0, 8))
+        columns = ("callsign", "heard", "position", "symbol", "comment")
+        self.aprs_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=6)
+        headings = {
+            "callsign": "Indicatif", "heard": "Dernière réception", "position": "Position",
+            "symbol": "Symbole", "comment": "Commentaire",
+        }
+        widths = {"callsign": 110, "heard": 150, "position": 220, "symbol": 70, "comment": 260}
+        for col in columns:
+            self.aprs_tree.heading(col, text=headings[col])
+            self.aprs_tree.column(col, width=widths[col], anchor="center" if col != "comment" else "w")
+        self.aprs_tree.pack(fill="both", expand=True, padx=1, pady=1)
+
+        map_outer = theme.card(wrapper)
+        map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.aprs_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.aprs_map.pack(fill="both", expand=True, padx=1, pady=1)
+        lat, lon = DEFAULT_COORDS
+        self.aprs_map.set_position(lat, lon)
+        self.aprs_map.set_zoom(9)
+
+    def _render_aprs_stations(self, data, error):
+        if error:
+            self.aprs_count_label.config(
+                text="Stations entendues : indisponible — aprs-api.service est-il déployé sur le Pi ?",
+            )
+            for item in self.aprs_tree.get_children():
+                self.aprs_tree.delete(item)
+            self.aprs_map.delete_all_marker()
+            return
+
+        self.aprs_count_label.config(text=f"Stations entendues : {len(data)}")
+        for item in self.aprs_tree.get_children():
+            self.aprs_tree.delete(item)
+        self.aprs_map.delete_all_marker()
+
+        for st in data:
+            last_heard = st.get("last_heard")
+            heard_txt = time.strftime("%H:%M:%S", time.localtime(last_heard)) if last_heard else "—"
+            lat, lon = st.get("lat"), st.get("lon")
+            if lat is not None and lon is not None:
+                dist = st.get("distance_km")
+                compass = st.get("bearing_compass", "")
+                position_txt = f"{lat:.4f}, {lon:.4f}"
+                if dist is not None:
+                    position_txt += f"  ({dist} km {compass})"
+            else:
+                position_txt = "—"
+            self.aprs_tree.insert(
+                "", "end",
+                values=(
+                    st.get("callsign", "—"), heard_txt, position_txt,
+                    st.get("symbol", "—"), st.get("comment", ""),
+                ),
+            )
+            if lat is not None and lon is not None:
+                self.aprs_map.set_marker(lat, lon, text=st.get("callsign", ""))
 
     # --------------------------------------------------------- Winlink --
 
