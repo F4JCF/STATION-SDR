@@ -95,6 +95,63 @@ def get_system_health(host: str, port: int) -> dict:
     return resp.json()
 
 
+def pi_power_action(host: str, port: int, action: str) -> dict:
+    """Redémarre ("reboot") ou éteint ("shutdown") le Pi (sdr_switch.py)."""
+    resp = requests.post(f"http://{host}:{port}/api/system/{action}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_pi_backup(host: str, port: int) -> bytes:
+    """Archive .tar.gz des configurations du Pi."""
+    resp = requests.get(f"http://{host}:{port}/api/system/backup", timeout=60)
+    resp.raise_for_status()
+    return resp.content
+
+
+def get_service_log(host: str, port: int, unit: str, lines: int = 60) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/system/logs", params={"unit": unit, "lines": lines}, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_stats_series(host: str, port: int, hours: float) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/stats/series", params={"hours": hours}, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_stats_polar(host: str, port: int, kind: str, hours: float) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/stats/polar", params={"kind": kind, "hours": hours}, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_vigilance(host: str, port: int) -> dict:
+    """Vigilance Météo-France du département (relevée par station_monitor.py)."""
+    resp = requests.get(f"http://{host}:{port}/api/vigilance", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_monitor_config(host: str, port: int) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/monitor/config", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def set_monitor_config(host: str, port: int, cfg: dict) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/monitor/config", json=cfg, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def monitor_test(host: str, port: int) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/monitor/test", timeout=40)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_sdr_mode(host: str, port: int) -> dict:
     """Mode actuel de la clé SDR (sdr_switch.py)."""
     url = f"http://{host}:{port}/api/sdr/mode"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Surveillance F4JCF-SDR-STATION (statistiques + notifications)
+After=network-online.target sdr-switch.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=STATION_MONITOR_PORT=5008
+ExecStart=/usr/bin/python3 /usr/local/bin/station_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

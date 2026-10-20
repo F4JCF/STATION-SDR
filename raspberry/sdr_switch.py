@@ -91,8 +91,23 @@ def _read_mode() -> str:
     return DEFAULT_MODE
 
 
+LAST_MODE_FILE = os.path.join(STATE_DIR, "last_mode")
+
+
+def _read_last_mode():
+    try:
+        with open(LAST_MODE_FILE, "r", encoding="utf-8") as f:
+            mode = f.read().strip()
+        return mode if mode in CANDIDATES else None
+    except OSError:
+        return None
+
+
 def _write_mode(mode: str) -> None:
     os.makedirs(STATE_DIR, exist_ok=True)
+    if mode != OFF:
+        with open(LAST_MODE_FILE, "w", encoding="utf-8") as f:
+            f.write(mode)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         f.write(mode)
 
@@ -331,6 +346,73 @@ def _health() -> dict:
     return out
 
 
+# --------------------------------------------------------- Maintenance --
+
+# Services dont on peut lire le journal depuis l'appli (liste fermée :
+# l'appli ne peut pas demander n'importe quelle commande au Pi).
+LOG_UNITS = {
+    "readsb": "ADS-B (readsb)", "direwolf": "APRS (Direwolf)", "ais-catcher": "AIS (AIS-catcher)",
+    "svxlink": "SvxLink", "aprs-api": "API APRS", "svxlink-api": "API SvxLink", "sdr-switch": "Bascule de clé",
+    "station-monitor": "Surveillance / notifications", "pat@f4jcf": "Winlink (Pat)", "docker:openwebrx": "OpenWebRX",
+}
+
+# Fichiers de configuration inclus dans la sauvegarde.
+BACKUP_PATHS = [
+    "/etc/direwolf.conf", "/etc/systemd/system/direwolf.service.d",
+    "/etc/svxlink", "/etc/default/svxlink",
+    "/etc/AIS-catcher",
+    "/etc/default/readsb",
+    "/var/lib/sdr-switch", "/etc/station-monitor.json",
+    "/home/f4jcf/.config/pat/config.json",
+    "/etc/systemd/system/sdr-switch.service", "/etc/systemd/system/aprs-api.service",
+    "/etc/systemd/system/svxlink-api.service", "/etc/systemd/system/station-monitor.service",
+    "/var/lib/alsa/asound.state", "/etc/voicecard",
+]
+
+
+def _service_logs(unit: str, lines: int = 60) -> str:
+    lines = max(10, min(300, lines))
+    try:
+        if unit.startswith("docker:"):
+            res = _docker("logs", "--tail", str(lines), unit[7:])
+            return (res.stdout + res.stderr)[-60000:]
+        if unit == "svxlink" and os.path.exists("/var/log/svxlink"):
+            res = subprocess.run(["tail", "-n", str(lines), "/var/log/svxlink"], capture_output=True, text=True, timeout=10)
+            return res.stdout[-60000:]
+        res = subprocess.run(["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short-iso"],
+                             capture_output=True, text=True, timeout=15)
+        return (res.stdout or res.stderr)[-60000:]
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"Lecture impossible : {exc}"
+
+
+def _backup_tar() -> bytes:
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for path in BACKUP_PATHS:
+            if os.path.exists(path):
+                try:
+                    tar.add(path, arcname=path.lstrip("/"))
+                except OSError:
+                    pass
+        info = tarfile.TarInfo("LISEZMOI.txt")
+        txt = ("Sauvegarde des configurations de F4JCF-SDR-STATION ("
+               + time.strftime("%d/%m/%Y %H:%M") + ").\nRestauration : copier chaque fichier "
+               "à son emplacement d'origine (chemins conservés dans l'archive), puis redémarrer le Pi.\n"
+               "Attention : contient des mots de passe (Winlink, EchoLink) : à garder en lieu sûr.\n").encode("utf-8")
+        info.size = len(txt)
+        info.mtime = time.time()
+        tar.addfile(info, io.BytesIO(txt))
+    return buf.getvalue()
+
+
+def _power_action(action: str) -> None:
+    time.sleep(2)  # laisse le temps à la réponse HTTP de partir
+    subprocess.run(["systemctl", "reboot" if action == "reboot" else "poweroff"], timeout=30)
+
+
 # --------------------------------------------------------------- Serveur --
 
 def _mode_status() -> dict:
@@ -345,6 +427,7 @@ def _mode_status() -> dict:
         "hold_until": _sched_state["hold_until"] or None,
         "next_change": _sched_state["next_change"],
         "labels": LABELS,
+        "last_mode": _read_last_mode(),
     }
 
 
@@ -366,11 +449,40 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _mode_status())
         elif path == "/api/system/health":
             self._send(200, _health())
+        elif path == "/api/system/logs":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            unit = (q.get("unit") or [""])[0]
+            if unit not in LOG_UNITS:
+                self._send(400, {"error": "service non autorisé", "units": LOG_UNITS})
+                return
+            try:
+                lines = int((q.get("lines") or ["60"])[0])
+            except ValueError:
+                lines = 60
+            self._send(200, {"unit": unit, "label": LOG_UNITS[unit], "text": _service_logs(unit, lines)})
+        elif path == "/api/system/log-units":
+            self._send(200, LOG_UNITS)
+        elif path == "/api/system/backup":
+            data = _backup_tar()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="station-sdr-config-{time.strftime("%Y%m%d-%H%M")}.tar.gz"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self._send(404, {"error": "introuvable"})
 
     def do_POST(self):
         path = self._path()
+        if path in ("/api/system/reboot", "/api/system/shutdown"):
+            action = "reboot" if path.endswith("reboot") else "shutdown"
+            log.warning("Demande de %s depuis %s", action, self.address_string())
+            self._send(200, {"ok": True, "action": action})
+            threading.Thread(target=_power_action, args=(action,), daemon=True).start()
+            return
         if path == "/api/sdr/schedule":
             try:
                 length = int(self.headers.get("Content-Length") or 0)

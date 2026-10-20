@@ -191,3 +191,15 @@ Installe Pat (client Winlink, paquet officiel), configure l'indicatif et le
 locator, ouvre son interface web et son API sur le port 8080 (réseau local).
 Le mot de passe Winlink se saisit dans Pat (navigateur → Settings), jamais
 dans STATION-SDR.
+
+## Surveillance : statistiques, notifications, vigilance
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_station_monitor.sh | sudo bash
+```
+
+Installe `station_monitor.py` (port 5008) : historique 30 jours (SQLite),
+polaires de portée ADS-B / AIS, notifications ntfy / e-mail des événements
+de sécurité, vigilance Météo-France (clé API gratuite à saisir dans l'appli).
+Met aussi à jour `sdr_switch.py` (redémarrage / arrêt du Pi, journaux,
+sauvegarde des configurations, mode « clé arrêtée »).

@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "port_ais": 8100,
     "port_svxlink": 5007,
     "port_winlink": 8080,
+    "port_monitor": 5008,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,

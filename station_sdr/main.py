@@ -19,7 +19,7 @@ import tkinter as tk
 import traceback
 import webbrowser
 from collections import deque
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import requests
 from PIL import Image, ImageDraw, ImageTk
@@ -95,6 +95,7 @@ HOME_TILES = [
     ("services", "Services système", "Vue d'ensemble des services"),
     ("health", "Santé du Pi", "Alimentation, température, ressources"),
     ("alerts", "Alertes", "Urgences avion, balises, messages"),
+    ("stats", "Statistiques", "Historique, portée, polaires"),
 ]
 
 # Module -> mode de la clé SDR unique (sdr_switch.py sur le Pi). Ouvrir
@@ -290,6 +291,10 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
             [pt(0.14, 0.45), pt(0.28, 0.28), pt(0.40, 0.54), pt(0.54, 0.24), pt(0.68, 0.50), pt(0.86, 0.38)],
             fill=color, width=max(1, lw - 1),
         )
+    elif key == "stats":
+        d.line([pt(0.10, 0.90), pt(0.92, 0.90)], fill=color, width=lw)
+        d.line([pt(0.10, 0.10), pt(0.10, 0.90)], fill=color, width=lw)
+        d.line([pt(0.18, 0.72), pt(0.38, 0.48), pt(0.56, 0.60), pt(0.86, 0.22)], fill=color, width=lw)
     elif key == "alerts":
         d.polygon([pt(0.5, 0.06), pt(0.95, 0.90), pt(0.05, 0.90)], outline=color, width=lw)
         d.line([pt(0.5, 0.34), pt(0.5, 0.64)], fill=color, width=lw + 1)
@@ -335,6 +340,133 @@ def _find_service(data: dict, *name_fragments: str):
         if any(f in key_l or f in label for f in fragments):
             return info
     return None
+
+
+class _LineChart(tk.Canvas):
+    """Petite courbe temporelle (une série), avec trous quand une valeur
+    manque (module sans la clé) et bandes rouges optionnelles (périodes de
+    sous-tension)."""
+
+    def __init__(self, parent, title, unit, color, width=420, height=190):
+        super().__init__(parent, width=width, height=height, bg=theme.BG_CARD, highlightthickness=0)
+        self.title, self.unit, self.color = title, unit, color
+        self.points, self.bands, self.note = [], [], ""
+        self.t0 = self.t1 = None
+        self.bind("<Configure>", lambda _e: self._draw())
+
+    def set(self, points, t0, t1, bands=None, note=""):
+        self.points, self.t0, self.t1 = points, t0, t1
+        self.bands, self.note = bands or [], note
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        w, h = max(self.winfo_width(), 200), max(self.winfo_height(), 120)
+        left, right, top, bottom = 44, 12, 26, 26
+        vals = [v for _t, v in self.points if v is not None]
+        last = next((v for _t, v in reversed(self.points) if v is not None), None)
+        head = self.title + (f"   ·   max {max(vals):.0f} {self.unit}   ·   actuel {last:.0f} {self.unit}"
+                             if vals and last is not None else "")
+        self.create_text(8, 10, text=head, anchor="w", fill=theme.TEXT, font=("Segoe UI", 9, "bold"))
+        pw, ph = w - left - right, h - top - bottom
+        self.create_rectangle(left, top, left + pw, top + ph, outline=theme.BORDER)
+        if not self.t0 or not self.t1 or self.t1 <= self.t0:
+            return
+        ymax = max(vals) if vals else 1
+        ymax = max(1, ymax * 1.15)
+        span = self.t1 - self.t0
+
+        def X(t):
+            return left + (t - self.t0) / span * pw
+
+        def Y(v):
+            return top + ph - v / ymax * ph
+
+        for b0, b1 in self.bands:
+            self.create_rectangle(X(max(b0, self.t0)), top, X(min(b1, self.t1)), top + ph,
+                                  fill="#5a1f22", outline="")
+        for i in range(5):
+            v = ymax * i / 4
+            y = Y(v)
+            self.create_line(left, y, left + pw, y, fill=theme.BORDER, dash=(2, 4))
+            self.create_text(left - 4, y, text=f"{v:.0f}", anchor="e", fill=theme.MUTED, font=("Segoe UI", 8))
+        fmt = "%H:%M" if span <= 2 * 86400 else "%d/%m"
+        for i in range(5):
+            t = self.t0 + span * i / 4
+            self.create_text(X(t), top + ph + 12, text=time.strftime(fmt, time.localtime(t)),
+                             fill=theme.MUTED, font=("Segoe UI", 8))
+        seg, prev_t = [], None
+        gap = max(300, span / 150)
+        for t, v in self.points:
+            if v is None or (prev_t is not None and t - prev_t > gap):
+                if len(seg) >= 4:
+                    self.create_line(*seg, fill=self.color, width=2)
+                elif len(seg) == 2:
+                    self.create_oval(seg[0] - 2, seg[1] - 2, seg[0] + 2, seg[1] + 2, fill=self.color, outline="")
+                seg = []
+            if v is not None:
+                seg += [X(t), Y(v)]
+            prev_t = t
+        if len(seg) >= 4:
+            self.create_line(*seg, fill=self.color, width=2)
+        elif len(seg) == 2:
+            self.create_oval(seg[0] - 2, seg[1] - 2, seg[0] + 2, seg[1] + 2, fill=self.color, outline="")
+        if not vals:
+            self.create_text(left + pw / 2, top + ph / 2, text=self.note or "aucune donnée sur la période",
+                             fill=theme.MUTED, font=theme.FONT_SUBTITLE)
+
+
+class _PolarChart(tk.Canvas):
+    """Portée maximale par direction (secteurs de 10°), nord en haut."""
+
+    def __init__(self, parent, title, color, size=330):
+        super().__init__(parent, width=size, height=size + 24, bg=theme.BG_CARD, highlightthickness=0)
+        self.title, self.color, self.size = title, color, size
+        self.sectors = [None] * 36
+        self._draw()
+
+    def set(self, sectors):
+        self.sectors = sectors or [None] * 36
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        s = self.size
+        cx, cy, r = s / 2, s / 2 + 22, s / 2 - 26
+        vals = [v for v in self.sectors if v]
+        vmax = max(vals) if vals else 0
+        self.create_text(8, 10, anchor="w", fill=theme.TEXT, font=("Segoe UI", 9, "bold"),
+                         text=self.title + (f"   ·   max {vmax:.0f} km" if vmax else ""))
+        scale_max = max(10, math.ceil(vmax / 50) * 50) if vmax else 50
+        for i in range(1, 5):
+            rr = r * i / 4
+            self.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=theme.BORDER)
+            self.create_text(cx + 3, cy - rr + 7, text=f"{scale_max * i / 4:.0f}", anchor="w",
+                             fill=theme.MUTED, font=("Segoe UI", 7))
+        for ang, lab in ((0, "N"), (90, "E"), (180, "S"), (270, "O")):
+            a = math.radians(ang)
+            self.create_line(cx, cy, cx + r * math.sin(a), cy - r * math.cos(a), fill=theme.BORDER)
+            self.create_text(cx + (r + 11) * math.sin(a), cy - (r + 11) * math.cos(a), text=lab,
+                             fill=theme.MUTED, font=("Segoe UI", 8, "bold"))
+        if not vals:
+            self.create_text(cx, cy, text="aucune donnée", fill=theme.MUTED, font=theme.FONT_SUBTITLE)
+            return
+        pts = []
+        for i, v in enumerate(self.sectors):
+            for frac in (0.0, 1.0):  # bord gauche et droit du secteur
+                a = math.radians(i * 10 + frac * 10)
+                rr = (v or 0) / scale_max * r
+                pts += [cx + rr * math.sin(a), cy - rr * math.cos(a)]
+        # Remplissage « transparent » simulé : couleur mélangée au fond (le
+        # motif stipple de Tk n'est pas fiable sous Windows).
+        c1, c2 = _hex_to_rgb(self.color), _hex_to_rgb(theme.BG_CARD)
+        fill = "#%02x%02x%02x" % tuple(int(a * 0.35 + b * 0.65) for a, b in zip(c1, c2))
+        self.create_polygon(*pts, fill=fill, outline="", width=0)
+        for i in range(1, 5):  # cercles redessinés par-dessus le remplissage
+            rr = r * i / 4
+            self.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=theme.BORDER)
+        self.create_polygon(*pts, fill="", outline=self.color, width=2)
+        self.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=theme.TEXT, outline="")
 
 
 class _Gauge(tk.Canvas):
@@ -599,6 +731,7 @@ class App(tk.Tk):
         self._build_sdr_tab(self.pages["sdr"])
         self._build_health_tab(self.pages["health"])
         self._build_alerts_tab(self.pages["alerts"])
+        self._build_stats_tab(self.pages["stats"])
         self._update_alert_chip()
 
         self.show_home()
@@ -637,6 +770,19 @@ class App(tk.Tk):
         self.home_power_sub.pack(anchor="w", pady=(8, 0))
         self.home_uptime = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
         self.home_uptime.pack(anchor="w", pady=(2, 0))
+        # Bouton d'arrêt / relance de la clé SDR, directement sur l'accueil
+        key_col = tk.Frame(row, bg=theme.BG_CARD)
+        key_col.grid(row=0, column=len(specs) + 1, padx=(10, 6), sticky="ns")
+        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(2, 6))
+        self.home_key_label = tk.Label(key_col, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 13, "bold"))
+        self.home_key_label.pack(anchor="w")
+        self.home_key_button = tk.Button(
+            key_col, text="■  Arrêter la clé SDR", font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
+            bg=theme.RED, fg="#0b0f17", activebackground="#ff7b72", activeforeground="#0b0f17",
+            padx=14, pady=8, cursor="hand2", command=self._home_key_action,
+        )
+        self.home_key_button.pack(anchor="w", pady=(10, 0))
+
         clickable = [outer, row, power, led_row, self.home_power_led, self.home_power_text,
                      self.home_power_sub, self.home_uptime, *self.home_gauges.values()]
         for w in clickable:
@@ -645,6 +791,29 @@ class App(tk.Tk):
                 w.configure(cursor="hand2")
             except tk.TclError:
                 pass
+
+    def _home_key_action(self):
+        if getattr(self, "_sdr_mode", None) == "off":
+            self._switch_sdr(getattr(self, "_sdr_last_mode", None) or "adsb")
+        else:
+            self._stop_sdr()
+
+    def _render_home_key(self):
+        if not hasattr(self, "home_key_button"):
+            return
+        mode = getattr(self, "_sdr_mode", None)
+        if mode == "off":
+            last = getattr(self, "_sdr_last_mode", None) or "adsb"
+            self.home_key_label.config(text="Arrêtée", fg=theme.RED)
+            self.home_key_button.config(
+                text=f"▶  Relancer ({SDR_MODE_LABELS.get(last, last)})", bg=theme.GREEN,
+                activebackground="#56d364",
+            )
+        else:
+            self.home_key_label.config(
+                text=SDR_MODE_LABELS.get(mode, "—") if mode else "—", fg=theme.ACCENT if mode else theme.MUTED,
+            )
+            self.home_key_button.config(text="■  Arrêter la clé SDR", bg=theme.RED, activebackground="#ff7b72")
 
     def _render_home_gauges(self, data):
         if not hasattr(self, "home_gauges"):
@@ -807,6 +976,11 @@ class App(tk.Tk):
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
 
         self._current_view = key
+        if key == "stats" and not getattr(self, "_stats_poll_running", False):
+            self._stats_poll_running = True
+            self._stats_poll()
+        if key == "alerts" and hasattr(self, "nt_status"):
+            self._notify_load()
         if key == "svxlink" and not getattr(self, "_svx_poll_running", False):
             self._svx_poll_running = True
             self._svx_poll()
@@ -851,6 +1025,7 @@ class App(tk.Tk):
             lambda: api_client.get_sdr_mode(host, cfg.get("port_sdr_switch", 5006)), self._render_sdr_mode,
         )
         self._fetch_winlink()
+        self._fetch_vigilance()
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -943,6 +1118,7 @@ class App(tk.Tk):
             overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=240, justify="left",
         )
         self.weather_overlay_label.pack(anchor="w", pady=(4, 0))
+        self._build_vigilance_card(left_col)
 
         map_outer = theme.card(wrapper)
         map_outer.pack(side="left", fill="both", expand=True, pady=12, padx=(0, 12))
@@ -2244,10 +2420,12 @@ class App(tk.Tk):
             info_outer.inner, text=(
                 "Surveillé en permanence : codes transpondeur 7700 (détresse), 7600 (panne radio), 7500 (intrusion "
                 "illicite) et états d'urgence ADS-B  ·  balises AIS SART / EPIRB / homme à la mer  ·  messages APRS "
-                "adressés à F4JCF  ·  nouveaux courriers Winlink.\nAvion et AIS ne sont surveillés que lorsque leur "
+                "adressés à F4JCF  ·  nouveaux courriers Winlink  ·  vigilance Météo-France orange ou rouge (06).\nAvion et AIS ne sont surveillés que lorsque leur "
                 "module détient la clé SDR (voir la page Clé SDR pour le partage automatique)."
             ), bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=1300,
         ).pack(anchor="w", padx=14, pady=10)
+
+        self._build_notify_card(wrapper)
 
         table_outer = theme.card(wrapper)
         table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -2612,6 +2790,425 @@ class App(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # --------------------------------------------------------- Vigilance --
+
+    VIGI_COLORS = {1: ("#3fb950", "VERT"), 2: ("#eab308", "JAUNE"), 3: ("#f97316", "ORANGE"), 4: ("#f85149", "ROUGE")}
+
+    def _build_vigilance_card(self, parent):
+        outer = theme.card(parent)
+        outer.pack(fill="x", pady=(10, 0))
+        f = outer.inner
+        f.configure(padding=12)
+        tk.Label(f, text="Vigilance Météo-France · Alpes-Maritimes (06)", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_SECTION).pack(anchor="w")
+        self.vigi_rows = tk.Frame(f, bg=theme.BG_CARD)
+        self.vigi_rows.pack(anchor="w", fill="x", pady=(8, 0))
+        self.vigi_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+                                    wraplength=420, justify="left")
+        self.vigi_status.pack(anchor="w", pady=(6, 0))
+        key_row = tk.Frame(f, bg=theme.BG_CARD)
+        self.vigi_key_row = key_row
+        tk.Label(key_row, text="Clé API :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SUBTITLE).pack(side="left")
+        self.vigi_key_var = tk.StringVar()
+        ttk.Entry(key_row, textvariable=self.vigi_key_var, width=28, show="•").pack(side="left", padx=6)
+        ttk.Button(key_row, text="Enregistrer", style="Flat.TButton", command=self._vigi_save_key).pack(side="left")
+        ttk.Button(key_row, text="Créer une clé (gratuit)", style="Flat.TButton",
+                   command=lambda: self._open_url("https://portail-api.meteofrance.fr/")).pack(side="left", padx=(6, 0))
+        self._vigi_key_shown = False
+
+    def _fetch_vigilance(self):
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_monitor", 5008)
+        try:
+            data = api_client.get_vigilance(host, port)
+        except Exception as exc:
+            self.after(0, self._render_vigilance, None, str(exc))
+            return
+        self.after(0, self._render_vigilance, data, None)
+
+    def _render_vigilance(self, data, error):
+        if not hasattr(self, "vigi_rows"):
+            return
+        for w in self.vigi_rows.winfo_children():
+            w.destroy()
+        show_key = False
+        if error:
+            self.vigi_status.config(text="Service de surveillance du Pi injoignable (port 5008).", fg=theme.MUTED)
+        elif data.get("status") == "non configurée":
+            self.vigi_status.config(
+                text=("Pour afficher la vigilance : créez un compte gratuit sur le portail API de Météo-France, "
+                      "abonnez-vous à l'API « Données Publiques Vigilance », générez une clé (API Key) et collez-la "
+                      "ci-dessous. Elle est enregistrée sur le Pi."), fg=theme.MUTED)
+            show_key = True
+        elif data.get("status") != "ok":
+            self.vigi_status.config(text=f"Vigilance indisponible ({data.get('status')}).", fg=theme.ORANGE)
+            show_key = "clé" in str(data.get("status"))
+        else:
+            periods = data.get("periods") or []
+            worst = 1
+            for per in periods:
+                color, name = self.VIGI_COLORS.get(per.get("max_color"), ("#8b96a5", "?"))
+                worst = max(worst, per.get("max_color") or 1)
+                row = tk.Frame(self.vigi_rows, bg=theme.BG_CARD)
+                row.pack(anchor="w", fill="x", pady=2)
+                tk.Label(row, text="Aujourd'hui" if per.get("echeance") == "J" else "Demain", width=11, anchor="w",
+                         bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD).pack(side="left")
+                tk.Label(row, text=f"  {name}  ", bg=color, fg="#0b0f17", font=theme.FONT_CHIP).pack(side="left")
+                phen = ", ".join(f"{p['name']} ({p['color_name']})" for p in per.get("phenomena") or [])
+                tk.Label(row, text=phen or "pas de vigilance particulière", bg=theme.BG_CARD, fg=theme.MUTED,
+                         font=theme.FONT_SUBTITLE, wraplength=300, justify="left").pack(side="left", padx=(8, 0))
+            fetched = data.get("fetched_at")
+            self.vigi_status.config(
+                text=f"Mise à jour Météo-France : {time.strftime('%H:%M', time.localtime(fetched))}" if fetched else "",
+                fg=theme.MUTED,
+            )
+            if "weather" in self.tile_chips and periods:
+                cur = self.tile_chips["weather"].text.split("  ·  vigilance")[0]
+                if worst >= 2:
+                    self.tile_chips["weather"].config(text=f"{cur}  ·  vigilance {self.VIGI_COLORS[worst][1].lower()}")
+            if worst >= 3:
+                per = next(p for p in periods if p.get("max_color") == worst)
+                phen = ", ".join(p["name"] for p in per.get("phenomena") or [] if p["color"] >= 3)
+                day = "aujourd'hui" if per.get("echeance") == "J" else "demain"
+                self._raise_alert(
+                    f"vigi:{per.get('echeance')}:{per.get('begin')}:{worst}", f"Vigilance {self.VIGI_COLORS[worst][1]} — 06",
+                    f"Météo-France : vigilance {self.VIGI_COLORS[worst][1].lower()} "
+                    f"{day} — {phen}.", cooldown=12 * 3600,
+                )
+        if show_key and not self._vigi_key_shown:
+            self.vigi_key_row.pack(anchor="w", pady=(8, 0))
+            self._vigi_key_shown = True
+        elif not show_key and self._vigi_key_shown:
+            self.vigi_key_row.pack_forget()
+            self._vigi_key_shown = False
+
+    def _vigi_save_key(self):
+        key = self.vigi_key_var.get().strip()
+        if not key:
+            return
+        host, port = self._monitor_endpoint()
+
+        def worker():
+            try:
+                api_client.set_monitor_config(host, port, {"vigilance": {"api_key": key}})
+                msg, col = "Clé enregistrée sur le Pi : la vigilance s'affichera d'ici une minute.", theme.GREEN
+            except Exception as exc:
+                msg, col = f"Échec : {exc}", theme.RED
+            self.after(0, lambda: (self.vigi_status.config(text=msg, fg=col), self.vigi_key_var.set("")))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ------------------------------------------------------- Statistiques --
+
+    def _build_stats_tab(self, frame):
+        wrapper = tk.Frame(frame, bg=theme.BG)
+        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+        bar = tk.Frame(wrapper, bg=theme.BG)
+        bar.pack(fill="x", padx=12, pady=(6, 6))
+        tk.Label(bar, text="Période :", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left")
+        self.stats_hours = 24
+        self.stats_period_buttons = {}
+        for hours, txt in ((6, "6 h"), (24, "24 h"), (24 * 7, "7 jours"), (24 * 30, "30 jours")):
+            b = tk.Button(bar, text=txt, font=theme.FONT_BODY_BOLD, relief="flat", bd=0, padx=12, pady=4,
+                          bg=theme.BG_CARD_ALT, fg=theme.TEXT, cursor="hand2",
+                          command=lambda h=hours: self._stats_set_period(h))
+            b.pack(side="left", padx=4)
+            self.stats_period_buttons[hours] = b
+        self.stats_status = tk.Label(bar, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.stats_status.pack(side="left", padx=(16, 0))
+        ttk.Button(bar, text="Actualiser", style="Flat.TButton", command=self._fetch_stats_async).pack(side="right")
+
+        body = tk.Frame(wrapper, bg=theme.BG)
+        body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        charts = tk.Frame(body, bg=theme.BG)
+        charts.pack(side="left", fill="both", expand=True)
+        specs = (
+            ("aircraft", "Avions suivis", "", "#ff7a1a"),
+            ("adsb_max_km", "Portée ADS-B max", "km", "#f0b429"),
+            ("ships", "Navires suivis", "", "#3b82f6"),
+            ("ais_max_km", "Portée AIS max", "km", "#06b6d4"),
+            ("aprs_stations", "Stations APRS (30 dernières min)", "", "#22c55e"),
+            ("temp", "Température CPU (rouge = sous-tension)", "°C", "#f472b6"),
+        )
+        self.stats_charts = {}
+        for i, (key, title, unit, color) in enumerate(specs):
+            r, c = divmod(i, 2)
+            charts.grid_columnconfigure(c, weight=1, uniform="ch")
+            charts.grid_rowconfigure(r, weight=1)
+            outer = theme.card(charts)
+            outer.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
+            ch = _LineChart(outer.inner, title, unit, color, height=180)
+            ch.pack(fill="both", expand=True, padx=6, pady=6)
+            self.stats_charts[key] = ch
+
+        side = tk.Frame(body, bg=theme.BG)
+        side.pack(side="left", fill="y", padx=(8, 0))
+        self.stats_polars = {}
+        for kind, title, color in (("adsb", "Polaire de portée ADS-B", "#f0b429"), ("ais", "Polaire de portée AIS", "#06b6d4")):
+            outer = theme.card(side)
+            outer.pack(fill="x", pady=4)
+            p = _PolarChart(outer.inner, title, color, size=300)
+            p.pack(padx=6, pady=6)
+            self.stats_polars[kind] = p
+        self.stats_share = tk.Label(side, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                    justify="left", wraplength=320)
+        self.stats_share.pack(anchor="w", pady=(6, 0))
+        self._stats_poll_running = False
+        self._stats_set_period(24, fetch=False)
+
+    def _stats_set_period(self, hours, fetch=True):
+        self.stats_hours = hours
+        for h, b in self.stats_period_buttons.items():
+            b.config(bg=theme.ACCENT if h == hours else theme.BG_CARD_ALT,
+                     fg="#1a1200" if h == hours else theme.TEXT)
+        if fetch:
+            self._fetch_stats_async()
+
+    def _stats_poll(self):
+        if getattr(self, "_current_view", None) != "stats":
+            self._stats_poll_running = False
+            return
+        self._fetch_stats_async()
+        self.after(60000, self._stats_poll)
+
+    def _fetch_stats_async(self):
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_monitor", 5008)
+        hours = self.stats_hours
+        self.stats_status.config(text="Chargement…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                data = {
+                    "series": api_client.get_stats_series(host, port, hours),
+                    "adsb": api_client.get_stats_polar(host, port, "adsb", hours),
+                    "ais": api_client.get_stats_polar(host, port, "ais", hours),
+                }
+                err = None
+            except Exception as exc:
+                data, err = None, str(exc)
+            self.after(0, self._render_stats, data, err)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_stats(self, data, error):
+        if error:
+            self.stats_status.config(
+                text="Statistiques indisponibles — le service de surveillance (port 5008) est-il installé ?",
+                fg=theme.RED,
+            )
+            return
+        ser = data["series"]
+        cols, rows = ser["columns"], ser["rows"]
+        idx = {c: i for i, c in enumerate(cols)}
+        t1 = time.time()
+        t0 = t1 - ser.get("hours", self.stats_hours) * 3600
+        notes = {"aircraft": "ADS-B n'a pas eu la clé sur la période", "adsb_max_km": "ADS-B n'a pas eu la clé",
+                 "ships": "AIS n'a pas eu la clé sur la période", "ais_max_km": "AIS n'a pas eu la clé",
+                 "aprs_stations": "APRS n'a pas eu la clé sur la période"}
+        bands, start = [], None
+        for r in rows:
+            uv = r[idx["undervolt"]]
+            if uv and start is None:
+                start = r[0]
+            elif not uv and start is not None:
+                bands.append((start, r[0]))
+                start = None
+        if start is not None:
+            bands.append((start, t1))
+        for key, ch in self.stats_charts.items():
+            pts = [(r[0], r[idx[key]]) for r in rows]
+            ch.set(pts, t0, t1, bands=bands if key == "temp" else None, note=notes.get(key, ""))
+        self.stats_polars["adsb"].set(data["adsb"].get("max_km"))
+        self.stats_polars["ais"].set(data["ais"].get("max_km"))
+        # Répartition du temps de clé
+        modes = {}
+        for r in rows:
+            m = r[idx["mode"]] or "?"
+            modes[m] = modes.get(m, 0) + 1
+        total = sum(modes.values())
+        if total:
+            share = "  ·  ".join(f"{SDR_MODE_LABELS.get(m, m)} {n * 100 / total:.0f} %" for m, n in
+                                 sorted(modes.items(), key=lambda x: -x[1]))
+            uv_pct = sum(1 for r in rows if r[idx["undervolt"]]) * 100 / total
+            self.stats_share.config(text=f"Temps de clé : {share}\nSous-tension : {uv_pct:.0f} % du temps")
+        else:
+            self.stats_share.config(text="Pas encore de données : le service relève une mesure par minute.")
+        self.stats_status.config(text=f"{len(rows)} mesure(s) · mis à jour à {time.strftime('%H:%M:%S')}",
+                                 fg=theme.MUTED)
+        if "stats" in self.tile_chips:
+            vals = [r[idx["adsb_max_km"]] for r in rows if r[idx["adsb_max_km"]]]
+            self.tile_chips["stats"].config(text=f"Portée ADS-B max {max(vals):.0f} km" if vals else "Historique 30 jours")
+
+    # ------------------------------------------------------- Notifications --
+
+    def _build_notify_card(self, parent):
+        outer = theme.card(parent)
+        outer.pack(fill="x", padx=12, pady=(0, 8))
+        f = outer.inner
+        f.configure(padding=14)
+        tk.Label(f, text="Notifications sur téléphone / e-mail (même PC éteint)", bg=theme.BG_CARD,
+                 fg=theme.TEXT, font=theme.FONT_SECTION).grid(row=0, column=0, columnspan=8, sticky="w")
+        tk.Label(f, text=(
+            "Téléphone : installez l'appli gratuite « ntfy » (Android / iPhone), abonnez-vous au sujet indiqué "
+            "ci-dessous (choisissez un nom difficile à deviner, il fait office de mot de passe)."),
+            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=1300,
+        ).grid(row=1, column=0, columnspan=8, sticky="w", pady=(4, 8))
+
+        def lab(r, c, t):
+            tk.Label(f, text=t, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).grid(row=r, column=c, sticky="e", padx=(12, 6), pady=3)
+
+        def chk(r, c, var, t):
+            tk.Checkbutton(f, text=t, variable=var, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
+                           activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_BODY,
+                           highlightthickness=0).grid(row=r, column=c, sticky="w", pady=3)
+
+        self.nt_vars = {k: tk.StringVar() for k in ("topic", "server", "smtp_host", "smtp_port", "user", "password", "to")}
+        self.nt_ntfy_on, self.nt_mail_on = tk.BooleanVar(), tk.BooleanVar()
+        chk(2, 0, self.nt_ntfy_on, "Téléphone (ntfy)")
+        lab(2, 1, "Sujet :")
+        ttk.Entry(f, textvariable=self.nt_vars["topic"], width=26).grid(row=2, column=2, sticky="w")
+        lab(2, 3, "Serveur :")
+        ttk.Entry(f, textvariable=self.nt_vars["server"], width=24).grid(row=2, column=4, sticky="w")
+        chk(3, 0, self.nt_mail_on, "E-mail")
+        lab(3, 1, "Serveur SMTP :")
+        ttk.Entry(f, textvariable=self.nt_vars["smtp_host"], width=26).grid(row=3, column=2, sticky="w")
+        lab(3, 3, "Port :")
+        ttk.Entry(f, textvariable=self.nt_vars["smtp_port"], width=6).grid(row=3, column=4, sticky="w")
+        lab(4, 1, "Identifiant :")
+        ttk.Entry(f, textvariable=self.nt_vars["user"], width=26).grid(row=4, column=2, sticky="w")
+        lab(4, 3, "Mot de passe :")
+        ttk.Entry(f, textvariable=self.nt_vars["password"], width=24, show="•").grid(row=4, column=4, sticky="w")
+        self.nt_pw_hint = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.nt_pw_hint.grid(row=4, column=5, columnspan=3, sticky="w", padx=(8, 0))
+        lab(5, 1, "Destinataire :")
+        ttk.Entry(f, textvariable=self.nt_vars["to"], width=26).grid(row=5, column=2, sticky="w")
+
+        tk.Label(f, text="Événements à envoyer :", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_BODY).grid(row=6, column=0, sticky="w", pady=(10, 2))
+        self.nt_events = {}
+        ev = tk.Frame(f, bg=theme.BG_CARD)
+        ev.grid(row=7, column=0, columnspan=8, sticky="w")
+        labels = {
+            "squawk": "Squawk 7700/7600/7500", "sart": "Balises AIS SART/EPIRB/MOB", "aprs_msg": "Messages APRS",
+            "winlink": "Courrier Winlink", "undervoltage": "Sous-tension du Pi", "dongle": "Clé SDR disparue",
+            "vigilance": "Vigilance orange/rouge",
+        }
+        for i, (k, t) in enumerate(labels.items()):
+            v = tk.BooleanVar(value=True)
+            self.nt_events[k] = v
+            tk.Checkbutton(ev, text=t, variable=v, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
+                           activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_BODY,
+                           highlightthickness=0).pack(side="left", padx=(0, 14))
+        btns = tk.Frame(f, bg=theme.BG_CARD)
+        btns.grid(row=8, column=0, columnspan=8, sticky="w", pady=(10, 0))
+        ttk.Button(btns, text="Enregistrer", style="Accent.TButton", command=self._notify_save).pack(side="left")
+        ttk.Button(btns, text="Envoyer un test", style="Flat.TButton", command=self._notify_test).pack(side="left", padx=8)
+        self.nt_status = tk.Label(btns, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.nt_status.pack(side="left", padx=(8, 0))
+        self._notify_loaded = False
+
+    def _monitor_endpoint(self):
+        return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_monitor", 5008)
+
+    def _notify_load(self):
+        host, port = self._monitor_endpoint()
+
+        def worker():
+            try:
+                cfg, err = api_client.get_monitor_config(host, port), None
+            except Exception as exc:
+                cfg, err = None, str(exc)
+            self.after(0, done, cfg, err)
+
+        def done(cfg, err):
+            if err:
+                self.nt_status.config(text="Service de surveillance injoignable (port 5008) — installez-le sur le Pi.",
+                                      fg=theme.RED)
+                return
+            n, e = cfg.get("ntfy", {}), cfg.get("email", {})
+            self.nt_ntfy_on.set(bool(n.get("enabled")))
+            self.nt_mail_on.set(bool(e.get("enabled")))
+            self.nt_vars["topic"].set(n.get("topic", ""))
+            self.nt_vars["server"].set(n.get("server", "https://ntfy.sh"))
+            for k in ("smtp_host", "user", "to"):
+                self.nt_vars[k].set(e.get(k, ""))
+            self.nt_vars["smtp_port"].set(str(e.get("smtp_port", 465)))
+            self.nt_vars["password"].set("")
+            self.nt_pw_hint.config(text="(enregistré sur le Pi — laisser vide pour le garder)" if e.get("password_set")
+                                   else "(non renseigné)")
+            for k, v in self.nt_events.items():
+                v.set(bool(cfg.get("events", {}).get(k, True)))
+            self._notify_loaded = True
+            self.nt_status.config(text="Réglages chargés depuis le Pi.", fg=theme.MUTED)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _notify_save(self, then=None):
+        try:
+            port_smtp = int(self.nt_vars["smtp_port"].get() or 465)
+        except ValueError:
+            port_smtp = 465
+        payload = {
+            "ntfy": {"enabled": self.nt_ntfy_on.get(), "topic": self.nt_vars["topic"].get().strip(),
+                     "server": self.nt_vars["server"].get().strip() or "https://ntfy.sh"},
+            "email": {"enabled": self.nt_mail_on.get(), "smtp_host": self.nt_vars["smtp_host"].get().strip(),
+                      "smtp_port": port_smtp, "ssl": port_smtp == 465, "user": self.nt_vars["user"].get().strip(),
+                      "password": self.nt_vars["password"].get(), "to": self.nt_vars["to"].get().strip()},
+            "events": {k: v.get() for k, v in self.nt_events.items()},
+        }
+        host, port = self._monitor_endpoint()
+        self.nt_status.config(text="Enregistrement…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                api_client.set_monitor_config(host, port, payload)
+                err = None
+            except Exception as exc:
+                err = str(exc)
+            self.after(0, done, err)
+
+        def done(err):
+            if err:
+                self.nt_status.config(text=f"Échec : {err}", fg=theme.RED)
+                return
+            self.nt_status.config(text=f"Enregistré sur le Pi à {time.strftime('%H:%M:%S')}.", fg=theme.GREEN)
+            self._notify_load()
+            if then:
+                then()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _notify_test(self):
+        host, port = self._monitor_endpoint()
+
+        def send():
+            self.nt_status.config(text="Envoi du test…", fg=theme.MUTED)
+
+            def worker():
+                try:
+                    res, err = api_client.monitor_test(host, port), None
+                except Exception as exc:
+                    res, err = None, str(exc)
+                self.after(0, done, res, err)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def done(res, err):
+            if err:
+                self.nt_status.config(text=f"Échec : {err}", fg=theme.RED)
+                return
+            ch = (res or {}).get("channels") or {}
+            if not ch:
+                self.nt_status.config(text="Aucun canal configuré : indiquez un sujet ntfy ou un e-mail.", fg=theme.ORANGE)
+                return
+            names = {"ntfy": "Téléphone", "email": "E-mail"}
+            txt = "   ·   ".join(f"{names.get(k, k)} : {v}" for k, v in ch.items())
+            ok = all(v == "ok" for v in ch.values())
+            self.nt_status.config(text=txt, fg=theme.GREEN if ok else theme.RED)
+
+        self._notify_save(then=send)
+
     # ------------------------------------------------- Pages informatives --
 
     def _build_info_tab(self, frame, title: str, status_key: str, body_text: str):
@@ -2742,6 +3339,8 @@ class App(tk.Tk):
                 self.sdr_mode_value.config(text="Service de bascule injoignable", fg=theme.RED)
             return
         self._sdr_switch_data = data
+        if data.get("last_mode"):
+            self._sdr_last_mode = data["last_mode"]
         if getattr(self, "_sdr_switching", False):
             return
         mode = data.get("mode")
@@ -3008,6 +3607,10 @@ class App(tk.Tk):
     # ---------------------------------------------------- Vignettes accueil --
 
     def _refresh_all_tiles(self):
+        mode = getattr(self, "_sdr_mode", None)
+        if mode and mode != "off":
+            self._sdr_last_mode = mode
+        self._render_home_key()
         for chip in getattr(self, "tile_chips", {}).values():
             if isinstance(chip, _TileChip):
                 chip.refresh()
@@ -3052,7 +3655,121 @@ class App(tk.Tk):
             self.health_tiles[key] = (v, s)
 
         self.health_sys_label = tk.Label(wrapper, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
-        self.health_sys_label.pack(anchor="w", padx=14, pady=(4, 0))
+        self.health_sys_label.pack(anchor="w", padx=14, pady=(4, 8))
+
+        # --- Maintenance
+        m_outer = theme.card(wrapper)
+        m_outer.pack(fill="x", padx=12, pady=(0, 12))
+        m = m_outer.inner
+        m.configure(padding=14)
+        tk.Label(m, text="Maintenance", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).grid(row=0, column=0, columnspan=6, sticky="w")
+        ttk.Button(m, text="Sauvegarder la configuration…", style="Accent.TButton",
+                   command=self._backup_config).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Button(m, text="Redémarrer le Pi", style="Flat.TButton",
+                   command=lambda: self._power_action("reboot")).grid(row=1, column=1, sticky="w", padx=(10, 0), pady=(10, 0))
+        ttk.Button(m, text="Éteindre le Pi", style="Flat.TButton",
+                   command=lambda: self._power_action("shutdown")).grid(row=1, column=2, sticky="w", padx=(10, 0), pady=(10, 0))
+        tk.Label(m, text="Journal d'un service :", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_BODY).grid(row=1, column=3, sticky="e", padx=(30, 6), pady=(10, 0))
+        self._log_units = {
+            "ADS-B (readsb)": "readsb", "APRS (Direwolf)": "direwolf", "AIS (AIS-catcher)": "ais-catcher",
+            "SvxLink": "svxlink", "Winlink (Pat)": "pat@f4jcf", "OpenWebRX": "docker:openwebrx",
+            "API APRS": "aprs-api", "API SvxLink": "svxlink-api", "Bascule de clé": "sdr-switch",
+            "Surveillance / notifications": "station-monitor",
+        }
+        self.health_log_var = tk.StringVar(value="ADS-B (readsb)")
+        ttk.Combobox(m, textvariable=self.health_log_var, values=list(self._log_units), state="readonly",
+                     width=26).grid(row=1, column=4, sticky="w", pady=(10, 0))
+        ttk.Button(m, text="Afficher", style="Flat.TButton", command=self._show_service_log).grid(
+            row=1, column=5, sticky="w", padx=(6, 0), pady=(10, 0))
+        self.health_maint_status = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.health_maint_status.grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
+
+    def _pi_endpoint(self):
+        return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_sdr_switch", 5006)
+
+    def _power_action(self, action):
+        verb = "redémarrer" if action == "reboot" else "éteindre"
+        extra = ("" if action == "reboot" else
+                 "\n\nAttention : une fois éteint, le Pi ne pourra être rallumé qu'en débranchant puis "
+                 "rebranchant son alimentation.")
+        if not messagebox.askyesno(f"{verb.capitalize()} le Pi", f"Voulez-vous vraiment {verb} le Raspberry Pi ?{extra}"):
+            return
+        host, port = self._pi_endpoint()
+
+        def worker():
+            try:
+                api_client.pi_power_action(host, port, action)
+                msg, col = (f"Demande envoyée à {time.strftime('%H:%M:%S')} : le Pi "
+                            + ("redémarre (environ 1 à 2 minutes)." if action == "reboot" else "s'éteint.")), theme.ORANGE
+            except Exception as exc:
+                msg, col = f"Échec : {exc}", theme.RED
+            self.after(0, lambda: self.health_maint_status.config(text=msg, fg=col))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _backup_config(self):
+        path = filedialog.asksaveasfilename(
+            title="Enregistrer la sauvegarde", defaultextension=".tar.gz",
+            initialfile=f"station-sdr-config-{time.strftime('%Y%m%d-%H%M')}.tar.gz",
+            filetypes=[("Archive", "*.tar.gz"), ("Tous les fichiers", "*.*")],
+        )
+        if not path:
+            return
+        host, port = self._pi_endpoint()
+        self.health_maint_status.config(text="Sauvegarde en cours…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                data = api_client.get_pi_backup(host, port)
+                with open(path, "wb") as f:
+                    f.write(data)
+                msg, col = (f"Sauvegarde enregistrée ({len(data) // 1024} Ko) : {path}  —  contient des mots de "
+                            "passe (Winlink, EchoLink), à garder en lieu sûr."), theme.GREEN
+            except Exception as exc:
+                msg, col = f"Échec de la sauvegarde : {exc}", theme.RED
+            self.after(0, lambda: self.health_maint_status.config(text=msg, fg=col))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_service_log(self):
+        label = self.health_log_var.get()
+        unit = self._log_units.get(label)
+        host, port = self._pi_endpoint()
+
+        def worker():
+            try:
+                text = api_client.get_service_log(host, port, unit, 120).get("text", "")
+            except Exception as exc:
+                text = f"Lecture impossible : {exc}\n(Le service de bascule du Pi est-il à jour ?)"
+            self.after(0, show, text)
+
+        def show(text):
+            win = tk.Toplevel(self)
+            win.title(f"Journal — {label}")
+            win.configure(bg=theme.BG)
+            win.geometry("1100x600")
+            bar = tk.Frame(win, bg=theme.BG)
+            bar.pack(fill="x", padx=10, pady=(10, 0))
+            tk.Label(bar, text=f"{label} — 120 dernières lignes ({time.strftime('%H:%M:%S')})", bg=theme.BG,
+                     fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+            txt = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, wrap="none", font=("Consolas", 9),
+                          relief="flat", padx=8, pady=8)
+            ysb = ttk.Scrollbar(win, orient="vertical", command=txt.yview)
+            txt.configure(yscrollcommand=ysb.set)
+            ysb.pack(side="right", fill="y", pady=10)
+            txt.pack(fill="both", expand=True, padx=(10, 0), pady=10)
+            txt.tag_configure("err", foreground=theme.RED)
+            txt.tag_configure("warn", foreground=theme.ORANGE)
+            for line in (text or "(journal vide)").splitlines():
+                low = line.lower()
+                tag = "err" if any(k in low for k in ("error", "erreur", "fatal", "failed", "échec")) else \
+                      "warn" if any(k in low for k in ("warn", "attention", "distortion")) else ""
+                txt.insert("end", line + "\n", tag)
+            txt.see("end")
+            txt.config(state="disabled")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     @staticmethod
     def _fmt_bytes(n):
