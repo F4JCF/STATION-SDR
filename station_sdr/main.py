@@ -106,7 +106,7 @@ MODULE_SDR_MODE = {
     "aprs": "aprs",
     "openwebrx": "openwebrx",
 }
-SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX"}
+SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -412,7 +412,8 @@ class _TileChip:
         current = getattr(self.app, "_sdr_mode", None)
         if mode and current and mode != current:
             self.label.config(
-                text=f" En pause · clé sur {SDR_MODE_LABELS.get(current, current)} ", fg=theme.MUTED,
+                text=(" En pause · clé SDR arrêtée " if current == "off"
+                      else f" En pause · clé sur {SDR_MODE_LABELS.get(current, current)} "), fg=theme.MUTED,
                 bg=theme.BG_CARD_ALT,
             )
             self.frame.config(bg=theme.BORDER)
@@ -475,6 +476,8 @@ class App(tk.Tk):
         app_menu.add_checkbutton(label="Alertes sonores", variable=self._alert_sound_var,
                                  command=self._toggle_alert_sound)
         app_menu.add_command(label="Historique des alertes", command=self._show_alert_history)
+        app_menu.add_separator()
+        app_menu.add_command(label="Arrêter la clé SDR", command=lambda: self._stop_sdr())
         app_menu.add_separator()
         app_menu.add_command(label="Quitter", command=self._on_close)
         menubar.add_cascade(label="STATION-SDR", menu=app_menu)
@@ -1738,7 +1741,9 @@ class App(tk.Tk):
             self._ais_ships = []
             if getattr(self, "_sdr_mode", None) not in (None, "ais"):
                 label = SDR_MODE_LABELS.get(self._sdr_mode, self._sdr_mode)
-                txt = f"Navires : AIS en pause — la clé SDR est sur {label}. Ouvrez cette page pour la récupérer."
+                txt = ("Navires : AIS en pause — la clé SDR est arrêtée. Ouvrez cette page pour la récupérer."
+                       if self._sdr_mode == "off" else
+                       f"Navires : AIS en pause — la clé SDR est sur {label}. Ouvrez cette page pour la récupérer.")
             else:
                 txt = "Navires : indisponible — AIS-catcher est-il démarré sur le Pi ?"
             self.ais_count_label.config(text=txt)
@@ -2777,6 +2782,12 @@ class App(tk.Tk):
             )
             b.pack(side="left", padx=4)
             self.sdr_mode_buttons[mode] = b
+        self.sdr_stop_button = tk.Button(
+            btns, text="■  Arrêter la clé SDR", font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
+            bg=theme.RED, fg="#0b0f17", activebackground="#ff7b72", activeforeground="#0b0f17",
+            padx=16, pady=6, cursor="hand2", command=self._stop_sdr,
+        )
+        self.sdr_stop_button.pack(side="left", padx=(24, 4))
 
         # --- Planning
         plan_outer = theme.card(wrapper)
@@ -2850,6 +2861,18 @@ class App(tk.Tk):
 
         self._sdr_sched_loaded = False
         self._sdr_sched_show()
+
+    def _stop_sdr(self):
+        if getattr(self, "_sdr_mode", None) == "off":
+            return
+        if not messagebox.askyesno(
+            "Arrêter la clé SDR",
+            "Arrêter tous les modules qui utilisent la clé SDR (ADS-B, AIS, APRS, OpenWebRX) ?\n\n"
+            "Le partage automatique est suspendu. Pour relancer, donnez la clé à un module "
+            "(bouton ou ouverture de sa page).",
+        ):
+            return
+        self._switch_sdr("off")
 
     def _sdr_sched_show(self):
         self.sdr_rot_frame.pack_forget()
@@ -2941,18 +2964,23 @@ class App(tk.Tk):
             return
         mode = data.get("mode")
         active = (data.get("active") or {}).get(mode)
-        self.sdr_mode_value.config(
-            text=SDR_MODE_LABELS.get(mode, mode or "—"), fg=theme.ACCENT if active else theme.ORANGE,
-        )
         sched = data.get("schedule") or {}
-        parts = ["service en marche" if active else "service arrêté ou en échec (clé débranchée ?)"]
+        if mode == "off":
+            self.sdr_mode_value.config(text="Arrêtée (aucun module)", fg=theme.RED)
+            parts = ["tous les modules sont arrêtés", "partage automatique suspendu"]
+        else:
+            self.sdr_mode_value.config(
+                text=SDR_MODE_LABELS.get(mode, mode or "—"), fg=theme.ACCENT if active else theme.ORANGE,
+            )
+            parts = ["service en marche" if active else "service arrêté ou en échec (clé débranchée ?)"]
         names = {"manual": "manuel", "rotation": "rotation", "planning": "planning horaire"}
-        parts.append(f"partage : {names.get(sched.get('type'), '—')}")
+        if mode != "off":
+            parts.append(f"partage : {names.get(sched.get('type'), '—')}")
         hold = data.get("hold_until")
         if hold and hold > time.time():
             parts.append(f"pause jusqu'à {time.strftime('%H:%M', time.localtime(hold))}")
         nxt = data.get("next_change")
-        if nxt and sched.get("type") != "manual":
+        if nxt and sched.get("type") != "manual" and mode != "off":
             parts.append(f"prochain changement vers {time.strftime('%H:%M', time.localtime(nxt))}")
         self.sdr_mode_detail.config(text="   ·   ".join(parts))
         installed = data.get("units") or {}
@@ -2966,8 +2994,16 @@ class App(tk.Tk):
         if not self._sdr_sched_loaded and sched:
             self._sdr_fill_schedule(sched)
             self._sdr_sched_loaded = True
+        self.sdr_stop_button.config(
+            state="disabled" if mode == "off" else "normal",
+            bg=theme.BG_CARD_ALT if mode == "off" else theme.RED,
+            fg=theme.MUTED if mode == "off" else "#0b0f17",
+        )
         if "sdr" in self.tile_chips:
-            self.tile_chips["sdr"].config(text=f"Clé sur {SDR_MODE_LABELS.get(mode, mode)} · {names.get(sched.get('type'), '—')}")
+            self.tile_chips["sdr"].config(
+                text="Clé arrêtée" if mode == "off"
+                else f"Clé sur {SDR_MODE_LABELS.get(mode, mode)} · {names.get(sched.get('type'), '—')}",
+            )
 
     # ---------------------------------------------------- Vignettes accueil --
 

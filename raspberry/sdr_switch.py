@@ -45,7 +45,10 @@ CANDIDATES = {
     "openwebrx": ["openwebrx", "docker:openwebrx"],
 }
 
-LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX"}
+LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "off": "Arrêtée"}
+# "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
+# automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
+OFF = "off"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("sdr-switch")
@@ -81,7 +84,7 @@ def _read_mode() -> str:
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             mode = f.read().strip()
-        if mode in CANDIDATES:
+        if mode in CANDIDATES or mode == OFF:
             return mode
     except OSError:
         pass
@@ -140,7 +143,7 @@ def switch_to(mode: str) -> dict:
             "stopped": stopped,
             "started": started,
             "failed": failed,
-            "ok": bool(started) and not failed,
+            "ok": (bool(started) and not failed) or (mode == OFF),
         }
 
 
@@ -251,6 +254,8 @@ def _scheduler_loop() -> None:
                 wanted, _sched_state["next_change"] = _planning_mode(sched["planning"], now)
             else:
                 _sched_state["next_change"] = None
+            if _read_mode() == OFF:
+                wanted = None  # clé arrêtée volontairement : le planning attend
             if wanted and now >= _sched_state["hold_until"] and wanted != _read_mode() and UNITS.get(wanted):
                 log.info("Planning (%s) : bascule vers %s", sched["type"], wanted)
                 switch_to(wanted)
@@ -382,6 +387,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "introuvable"})
             return
         mode = path[len(prefix):].strip("/")
+        if mode == OFF:
+            self._send(200, switch_to(OFF))
+            return
         if mode not in CANDIDATES:
             self._send(400, {"error": f"mode inconnu : {mode}"})
         elif not UNITS.get(mode):
@@ -407,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
 def _apply_boot_mode():
     try:
         boot_mode = _read_mode()
-        if UNITS.get(boot_mode):
+        if boot_mode == OFF or UNITS.get(boot_mode):
             switch_to(boot_mode)
     except Exception:
         log.exception("Échec de la bascule au démarrage")
