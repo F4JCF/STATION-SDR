@@ -203,3 +203,15 @@ polaires de portée ADS-B / AIS, notifications ntfy / e-mail des événements
 de sécurité, vigilance Météo-France (clé API gratuite à saisir dans l'appli).
 Met aussi à jour `sdr_switch.py` (redémarrage / arrêt du Pi, journaux,
 sauvegarde des configurations, mode « clé arrêtée »).
+
+## Balises de détresse 406 MHz (SATER)
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_beacon406.sh | sudo bash
+```
+
+Compile le décodeur dec406 (Fabrice Morel, MIT) pour RTL-SDR et installe
+`beacon406_api.py` (port 5009). Le module « Balise 406 » s'ajoute à la
+bascule de clé SDR : ouvrir la page « Balises de détresse » écoute
+406,0–406,1 MHz et décode les balises 1G et 2G (ELT, EPIRB, PLB, essais).
+Écoute seule : rien n'est émis.

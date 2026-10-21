@@ -91,6 +91,7 @@ HOME_TILES = [
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
     ("aprs", "APRS", "Direwolf — réception de paquets"),
     ("ais", "AIS", "Trafic maritime"),
+    ("beacon", "Balises de détresse", "406 MHz · décodage COSPAS-SARSAT"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Clé SDR", "Pilotage et partage automatique"),
     ("svxlink", "SvxLink", "Relais vocal / Echolink"),
@@ -109,8 +110,10 @@ MODULE_SDR_MODE = {
     "ais": "ais",
     "aprs": "aprs",
     "openwebrx": "openwebrx",
+    "beacon": "beacon",
 }
-SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "off": "arrêtée"}
+SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
+                   "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -353,6 +356,13 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
             [pt(0.14, 0.45), pt(0.28, 0.28), pt(0.40, 0.54), pt(0.54, 0.24), pt(0.68, 0.50), pt(0.86, 0.38)],
             fill=color, width=max(1, lw - 1),
         )
+    elif key == "beacon":
+        # Balise : boîtier, antenne et ondes
+        d.rounded_rectangle([*pt(0.36, 0.40), *pt(0.64, 0.92)], radius=size * 0.05, outline=color, width=lw)
+        d.line([pt(0.5, 0.40), pt(0.5, 0.14)], fill=color, width=lw)
+        d.ellipse([*pt(0.44, 0.62), *pt(0.56, 0.74)], fill=color)
+        d.arc([*pt(0.22, 0.02), *pt(0.78, 0.40)], start=200, end=340, fill=color, width=lw)
+        d.arc([*pt(0.06, -0.10), *pt(0.94, 0.52)], start=210, end=330, fill=color, width=lw)
     elif key == "stats":
         d.line([pt(0.10, 0.90), pt(0.92, 0.90)], fill=color, width=lw)
         d.line([pt(0.10, 0.10), pt(0.10, 0.90)], fill=color, width=lw)
@@ -906,6 +916,7 @@ class App(tk.Tk):
         self._build_aprs_tab(self.pages["aprs"])
         self._build_winlink_tab(self.pages["winlink"])
         self._build_ais_tab(self.pages["ais"])
+        self._build_beacon_tab(self.pages["beacon"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
         self._build_health_tab(self.pages["health"])
@@ -1041,7 +1052,7 @@ class App(tk.Tk):
         grid.pack(fill="both", expand=True, padx=4, pady=4)
 
         self.tile_chips = {}
-        columns = 6
+        columns = 7
         self.tile_frames = {}
         for i, (key, title, subtitle) in enumerate(HOME_TILES):
             r, c = divmod(i, columns)
@@ -1155,6 +1166,9 @@ class App(tk.Tk):
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
 
         self._current_view = key
+        if key == "beacon" and not getattr(self, "_b406_poll_running", False):
+            self._b406_poll_running = True
+            self._beacon_poll()
         if key == "aircraft" and not getattr(self, "_adsb_poll_running", False):
             self._adsb_poll_running = True
             self._adsb_poll()
@@ -1208,6 +1222,7 @@ class App(tk.Tk):
         )
         self._fetch_winlink()
         self._fetch_vigilance()
+        self._fetch_beacon(frames_only=getattr(self, "_current_view", None) != "beacon")
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -3537,14 +3552,14 @@ class App(tk.Tk):
         labels = {
             "squawk": "Squawk 7700/7600/7500", "sart": "Balises AIS SART/EPIRB/MOB", "aprs_msg": "Messages APRS",
             "winlink": "Courrier Winlink", "undervoltage": "Sous-tension du Pi", "dongle": "Clé SDR disparue",
-            "vigilance": "Vigilance orange/rouge",
+            "vigilance": "Vigilance orange/rouge", "beacon": "Balise 406 réelle", "beacon_test": "Balise 406 test",
         }
         for i, (k, t) in enumerate(labels.items()):
             v = tk.BooleanVar(value=True)
             self.nt_events[k] = v
             tk.Checkbutton(ev, text=t, variable=v, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
                            activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_BODY,
-                           highlightthickness=0).pack(side="left", padx=(0, 14))
+                           highlightthickness=0).grid(row=i // 5, column=i % 5, sticky="w", padx=(0, 14))
         btns = tk.Frame(f, bg=theme.BG_CARD)
         btns.grid(row=8, column=0, columnspan=8, sticky="w", pady=(10, 0))
         ttk.Button(btns, text="Enregistrer", style="Accent.TButton", command=self._notify_save).pack(side="left")
@@ -3653,6 +3668,346 @@ class App(tk.Tk):
             self.nt_status.config(text=txt, fg=theme.GREEN if ok else theme.RED)
 
         self._notify_save(then=send)
+
+    # ------------------------------------------------- Balises de détresse --
+
+    @staticmethod
+    def _compass(deg):
+        if deg is None:
+            return ""
+        names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
+        return names[int((deg % 360) / 22.5 + 0.5) % 16]
+
+    def _build_beacon_tab(self, frame):
+        outer = tk.Frame(frame, bg=theme.BG)
+        outer.pack(fill="both", expand=True, padx=4, pady=4)
+        left = tk.Frame(outer, bg=theme.BG, width=800)
+        left.pack(side="left", fill="y", pady=(0, 6))
+        left.pack_propagate(False)
+
+        st_outer = theme.card(left)
+        st_outer.pack(fill="x", padx=12, pady=(8, 6))
+        st = st_outer.inner
+        st.configure(padding=12)
+        row = tk.Frame(st, bg=theme.BG_CARD)
+        row.pack(fill="x")
+        tk.Label(row, text="Balises de détresse 406 MHz", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_SECTION).pack(side="left")
+        self.b406_pill = theme.pill(row, "INCONNU", theme.MUTED)
+        self.b406_pill.pack(side="left", padx=(12, 0))
+        ttk.Button(row, text="Effacer l'historique", style="Flat.TButton", command=self._beacon_clear).pack(side="right")
+        self.b406_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                  justify="left", anchor="w", wraplength=760)
+        self.b406_info.pack(anchor="w", pady=(6, 0))
+
+        tk.Label(left, text="Balises entendues (une ligne par balise)", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(
+            anchor="w", padx=12, pady=(2, 4))
+        tbl = theme.card(left)
+        tbl.pack(fill="x", padx=12, pady=(0, 6))
+        cols = ("time", "mode", "hex", "proto", "country", "count", "dist")
+        self.b406_tree = ttk.Treeview(tbl.inner, columns=cols, show="headings", height=6)
+        for c, (t, w, a) in {"time": ("Dernière réception", 125, "center"), "mode": ("Mode", 78, "center"),
+                             "hex": ("Hex ID", 178, "w"), "proto": ("Protocole", 150, "w"),
+                             "country": ("Pays", 72, "w"), "count": ("Reçue", 48, "center"),
+                             "dist": ("Distance / relèvement", 120, "e")}.items():
+            self.b406_tree.heading(c, text=t)
+            self.b406_tree.column(c, width=w, minwidth=40, anchor=a)
+        self.b406_tree.tag_configure("real", background="#5a1f22", foreground="#ffffff")
+        self.b406_tree.tag_configure("test", foreground="#e3b341")
+        vsb = ttk.Scrollbar(tbl.inner, orient="vertical", command=self.b406_tree.yview)
+        self.b406_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.b406_tree.pack(fill="x", padx=1, pady=1)
+        self.b406_tree.bind("<<TreeviewSelect>>", self._on_beacon_select)
+
+        man = tk.Frame(left, bg=theme.BG)
+        man.pack(fill="x", padx=12, pady=(0, 6))
+        tk.Label(man, text="Décoder une trame (hexadécimal) :", bg=theme.BG, fg=theme.MUTED,
+                 font=theme.FONT_SUBTITLE).pack(side="left")
+        self.b406_hex_var = tk.StringVar()
+        ttk.Entry(man, textvariable=self.b406_hex_var, width=46).pack(side="left", padx=6)
+        ttk.Button(man, text="Décoder", style="Accent.TButton", command=self._beacon_manual_decode).pack(side="left")
+
+        det = theme.card(left)
+        det.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        d = det.inner
+        d.configure(padding=10)
+        self.b406_title = tk.Label(d, text="Sélectionnez une trame pour voir son décodage complet.", bg=theme.BG_CARD,
+                                   fg=theme.TEXT, font=("Segoe UI", 13, "bold"), anchor="w", justify="left",
+                                   wraplength=760)
+        self.b406_title.pack(anchor="w")
+        self.b406_where = tk.Label(d, text="", bg=theme.BG_CARD, fg=theme.ACCENT, font=theme.FONT_BODY_BOLD,
+                                   anchor="w", justify="left", wraplength=760)
+        self.b406_where.pack(anchor="w", pady=(4, 0))
+        btns = tk.Frame(d, bg=theme.BG_CARD)
+        btns.pack(anchor="w", pady=(6, 6))
+        self.b406_osm_btn = ttk.Button(btns, text="Ouvrir la position (OpenStreetMap)", style="Flat.TButton",
+                                       command=lambda: self._beacon_open_map("osm"), state="disabled")
+        self.b406_osm_btn.pack(side="left")
+        self.b406_geo_btn = ttk.Button(btns, text="Géoportail (IGN)", style="Flat.TButton",
+                                       command=lambda: self._beacon_open_map("ign"), state="disabled")
+        self.b406_geo_btn.pack(side="left", padx=6)
+        ttk.Button(btns, text="Copier le décodage", style="Flat.TButton", command=self._beacon_copy).pack(side="left")
+        self.b406_text = tk.Text(d, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", 9), relief="flat",
+                                 wrap="word", height=12, padx=8, pady=6)
+        self.b406_text.pack(fill="both", expand=True)
+        self.b406_text.config(state="disabled")
+
+        right = tk.Frame(outer, bg=theme.BG)
+        right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
+        map_outer = theme.card(right)
+        map_outer.pack(fill="both", expand=True)
+        self.b406_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.b406_map.pack(fill="both", expand=True, padx=1, pady=1)
+        self.b406_map.set_position(*DEFAULT_COORDS)
+        self.b406_map.set_zoom(7)
+        tk.Label(right, text="Activité sur 406,0–406,1 MHz (salves détectées)", bg=theme.BG, fg=theme.TEXT,
+                 font=theme.FONT_BODY_BOLD).pack(anchor="w", pady=(8, 2))
+        bt = theme.card(right)
+        bt.pack(fill="x")
+        bcols = ("time", "freq", "type", "snr", "status")
+        self.b406_bursts = ttk.Treeview(bt.inner, columns=bcols, show="headings", height=5)
+        for c, (t, w) in {"time": ("Heure", 90), "freq": ("Fréquence (MHz)", 120), "type": ("Type", 70),
+                          "snr": ("SNR (dB)", 80), "status": ("Résultat", 140)}.items():
+            self.b406_bursts.heading(c, text=t)
+            self.b406_bursts.column(c, width=w, anchor="center")
+        self.b406_bursts.pack(fill="x", padx=1, pady=1)
+        tk.Label(right, text=(
+            "Écoute seule. Une balise émet une salve d'environ 0,5 s toutes les 50 s. Trame RÉELLE (hors mode "
+            "test) : une alerte de détresse est peut-être en cours — les secours sont normalement déjà alertés "
+            "par satellite ; en cas de doute, prévenir le CROSS (196) ou le 112."),
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=900,
+        ).pack(anchor="w", pady=(6, 0))
+
+        self._b406_frames = []
+        self._b406_selected = None
+        self._b406_poll_running = False
+        self._b406_markers = []
+
+    def _beacon_endpoint(self):
+        return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_beacon", 5009)
+
+    def _beacon_poll(self):
+        if getattr(self, "_current_view", None) != "beacon":
+            self._b406_poll_running = False
+            return
+        threading.Thread(target=self._fetch_beacon, daemon=True).start()
+        self.after(5000, self._beacon_poll)
+
+    def _fetch_beacon(self, frames_only=False):
+        host, port = self._beacon_endpoint()
+        try:
+            data = {"frames": api_client.get_beacon(host, port, "frames")}
+            if not frames_only:
+                data["status"] = api_client.get_beacon(host, port, "status")
+                data["bursts"] = api_client.get_beacon(host, port, "bursts")
+        except Exception as exc:
+            self.after(0, self._render_beacon, None, str(exc))
+            return
+        self.after(0, self._render_beacon, data, None)
+
+    def _render_beacon(self, data, error):
+        if not hasattr(self, "b406_tree"):
+            return
+        mode = getattr(self, "_sdr_mode", None)
+        if error:
+            if mode not in (None, "beacon"):
+                txt = "EN PAUSE" if mode != "off" else "CLÉ ARRÊTÉE"
+                self.b406_pill.config(text=f"  {txt}  ", bg=theme.MUTED)
+                self.b406_info.config(text=(f"La clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)} : ouvrez cette page "
+                                            "pour lui donner la clé et écouter le 406 MHz."))
+            else:
+                self.b406_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
+                self.b406_info.config(text="Le service beacon406 (port 5009) ne répond pas — installez-le sur le Pi "
+                                           "(install_beacon406.sh).")
+            if "beacon" in self.tile_chips:
+                self.tile_chips["beacon"].config(text="—")
+            return
+        frames = data.get("frames") or []
+        self._b406_frames = frames
+        self._check_beacon_alerts(frames)
+        st = data.get("status")
+        if st is not None:
+            if st.get("running"):
+                self.b406_pill.config(text="  ÉCOUTE  ", bg=theme.GREEN)
+            else:
+                self.b406_pill.config(text="  ARRÊTÉ  ", bg=theme.RED)
+            lb = st.get("last_burst")
+            last = (f"dernière salve {time.strftime('%H:%M:%S', time.localtime(lb['time']))} sur {lb['freq_mhz']:.4f} MHz "
+                    f"({lb['type']}, SNR {lb['snr_db']:.0f} dB, {lb.get('status', '')})") if lb else "aucune salve détectée"
+            err = f"\n⚠ {st['error']}" if st.get("error") else ""
+            self.b406_info.config(text=(
+                f"Bande {st.get('band', '406,0–406,1 MHz')}  ·  {st.get('bursts_last_hour', 0)} salve(s) la dernière heure  ·  "
+                f"{st.get('decoded', 0)} trame(s) décodée(s), {st.get('failed', 0)} non décodée(s) depuis le démarrage\n{last}{err}"),
+                fg=theme.ORANGE if err else theme.MUTED)
+            self.b406_bursts.delete(*self.b406_bursts.get_children())
+            for b in (data.get("bursts") or [])[:30]:
+                self.b406_bursts.insert("", "end", values=(
+                    time.strftime("%H:%M:%S", time.localtime(b["time"])), f"{b['freq_mhz']:.4f}", b.get("type", ""),
+                    f"{b.get('snr_db', 0):.0f}", b.get("status", "")))
+        # Une ligne par balise (Hex ID + mode) : la plus récente trame, le
+        # nombre de réceptions, et la dernière position connue.
+        groups = {}
+        for f in frames:  # du plus récent au plus ancien
+            k = (f.get("hex_id"), bool(f.get("test")))
+            g = groups.get(k)
+            if g is None:
+                groups[k] = g = {"latest": f, "count": 0, "pos": None}
+            g["count"] += 1
+            if g["pos"] is None and f.get("lat") is not None:
+                g["pos"] = f
+        self._b406_groups = list(groups.values())
+        tree = self.b406_tree
+        tree.delete(*tree.get_children())
+        for i, g in enumerate(self._b406_groups):
+            f, pf = g["latest"], g["pos"]
+            dist = (f"{pf['distance_km']:.0f} km · {pf['bearing_deg']}° {self._compass(pf['bearing_deg'])}"
+                    if pf is not None and pf.get("distance_km") is not None else "pas de position")
+            tree.insert("", "end", iid=str(i), tags=("test",) if f.get("test") else ("real",), values=(
+                time.strftime("%d/%m %H:%M:%S", time.localtime(f.get("time", 0))),
+                f"{'TEST' if f.get('test') else 'RÉELLE'} {f.get('generation', '')}", f.get("hex_id") or "?",
+                re.sub(r"^\d+\s*\((.*)\)$", r"\1", f.get("protocol") or ""),
+                re.sub(r"^\d+\s*\(|\)$", "", f.get("country") or ""), g["count"], dist))
+        # Carte
+        for m in self._b406_markers:
+            try:
+                m.delete()
+            except Exception:
+                pass
+        self._b406_markers = [self.b406_map.set_marker(*DEFAULT_COORDS, text="F4JCF", text_color="#16a34a",
+                                                       marker_color_circle="#14532d", marker_color_outside="#22c55e")]
+        self.b406_map.delete_all_path()
+        seen = set()
+        for f in frames:
+            if f.get("lat") is None or f.get("hex_id") in seen:
+                continue
+            seen.add(f.get("hex_id"))
+            real = not f.get("test")
+            self._b406_markers.append(self.b406_map.set_marker(
+                f["lat"], f["lon"], text=("⚠ " if real else "") + (f.get("hex_id") or "")[:8],
+                text_color="#b91c1c" if real else "#a16207",
+                marker_color_circle="#7f1d1d" if real else "#713f12",
+                marker_color_outside="#ef4444" if real else "#f59e0b"))
+        if "beacon" in self.tile_chips:
+            real = sum(1 for f in frames if not f.get("test") and time.time() - f.get("time", 0) < 86400)
+            self.tile_chips["beacon"].config(
+                text=(f"⚠ {real} réelle(s) sur 24 h" if real else f"{len(frames)} trame(s)") if frames else "aucune trame")
+        if self._b406_selected is not None:
+            for i, g in enumerate(self._b406_groups):
+                if (g["latest"].get("hex_id"), bool(g["latest"].get("test"))) == self._b406_selected:
+                    tree.selection_set(str(i))
+                    break
+
+    def _check_beacon_alerts(self, frames):
+        for f in frames:
+            if f.get("manual") or time.time() - (f.get("time") or 0) > 3600:
+                continue
+            test = bool(f.get("test"))
+            pos = ""
+            if f.get("lat") is not None:
+                pos = (f"\nPosition : {f['lat']:.5f}, {f['lon']:.5f} — {f.get('distance_km')} km au "
+                       f"{f.get('bearing_deg')}° ({self._compass(f.get('bearing_deg'))})")
+            self._raise_alert(
+                f"b406:{f.get('hex_id')}:{test}",
+                "Balise 406 — trame de TEST / exercice" if test else "BALISE 406 — ÉMISSION RÉELLE",
+                f"Hex ID {f.get('hex_id')} · {f.get('protocol') or '?'} · {f.get('country') or '?'}\n"
+                f"{f.get('identification') or ''}{pos}", cooldown=3600 if test else 600)
+
+    def _on_beacon_select(self, _e=None):
+        sel = self.b406_tree.selection()
+        groups = getattr(self, "_b406_groups", [])
+        if sel:
+            idx = int(sel[0])
+            if 0 <= idx < len(groups):
+                g = groups[idx]
+                f = dict(g["latest"])
+                if f.get("lat") is None and g["pos"] is not None:  # garder la dernière position connue
+                    for k in ("lat", "lon", "distance_km", "bearing_deg"):
+                        f[k] = g["pos"].get(k)
+                self._b406_selected = (f.get("hex_id"), bool(f.get("test")))
+                self._show_beacon(f)
+
+    def _show_beacon(self, f):
+        self._b406_shown = f
+        test = f.get("test")
+        self.b406_title.config(
+            text=f"{'TEST / EXERCICE' if test else 'ÉMISSION RÉELLE'} — {f.get('protocol') or 'balise'} — Hex ID {f.get('hex_id')}"
+                 + ("  (décodage manuel)" if f.get("manual") else ""),
+            fg=theme.ORANGE if test else theme.RED)
+        if f.get("lat") is not None:
+            self.b406_where.config(text=(
+                f"Position : {f['lat']:.5f}, {f['lon']:.5f}   →   {f['distance_km']:.1f} km de la station, "
+                f"relèvement {f['bearing_deg']}° ({self._compass(f['bearing_deg'])})"))
+            self.b406_osm_btn.config(state="normal")
+            self.b406_geo_btn.config(state="normal")
+            self.b406_map.set_position(f["lat"], f["lon"])
+            self.b406_map.delete_all_path()
+            self.b406_map.set_path([DEFAULT_COORDS, (f["lat"], f["lon"])], color="#ef4444" if not test else "#f59e0b", width=2)
+        else:
+            self.b406_where.config(text="Pas de position dans la trame (balise sans GPS ou position non encore acquise) : "
+                                        "localisation par radiogoniométrie sur 121,5 MHz.")
+            self.b406_osm_btn.config(state="disabled")
+            self.b406_geo_btn.config(state="disabled")
+        extra = ""
+        if f.get("freq_mhz"):
+            extra = f"Reçue le {time.strftime('%d/%m/%Y à %H:%M:%S', time.localtime(f.get('time', 0)))} sur " \
+                    f"{f['freq_mhz']:.4f} MHz, SNR {f.get('snr_db', 0):.0f} dB\n\n"
+        self.b406_text.config(state="normal")
+        self.b406_text.delete("1.0", "end")
+        self.b406_text.insert("1.0", extra + (f.get("text") or ""))
+        self.b406_text.config(state="disabled")
+
+    def _beacon_open_map(self, kind):
+        f = getattr(self, "_b406_shown", None)
+        if not f or f.get("lat") is None:
+            return
+        if kind == "ign":
+            url = f"https://www.geoportail.gouv.fr/carte?c={f['lon']},{f['lat']}&z=15&l0=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2::GEOPORTAIL:OGC:WMTS(1)&permalink=yes"
+        else:
+            url = f"https://www.openstreetmap.org/?mlat={f['lat']}&mlon={f['lon']}#map=14/{f['lat']}/{f['lon']}"
+        self._open_url(url)
+
+    def _beacon_copy(self):
+        f = getattr(self, "_b406_shown", None)
+        if f:
+            self.clipboard_clear()
+            self.clipboard_append(f.get("text") or "")
+
+    def _beacon_manual_decode(self):
+        hx = re.sub(r"\s", "", self.b406_hex_var.get())
+        if not hx:
+            return
+        host, port = self._beacon_endpoint()
+
+        def worker():
+            try:
+                res = api_client.beacon_decode(host, port, hx)
+            except Exception as exc:
+                res = {"error": f"service injoignable : {exc}"}
+            self.after(0, done, res)
+
+        def done(res):
+            if res.get("error"):
+                messagebox.showwarning("Décodage", res["error"])
+                return
+            self._b406_selected = None
+            self._show_beacon(res)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _beacon_clear(self):
+        if not messagebox.askyesno("Balises 406", "Effacer l'historique des trames et des salves ?"):
+            return
+        host, port = self._beacon_endpoint()
+
+        def worker():
+            try:
+                api_client.beacon_clear(host, port)
+            except Exception:
+                pass
+            self._fetch_beacon()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------- Pages informatives --
 
@@ -3819,7 +4174,7 @@ class App(tk.Tk):
         btns.pack(anchor="w")
         tk.Label(btns, text="Donner la clé à :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left", padx=(0, 10))
         self.sdr_mode_buttons = {}
-        for mode in ("adsb", "ais", "aprs", "openwebrx"):
+        for mode in ("adsb", "ais", "aprs", "beacon", "openwebrx"):
             b = tk.Button(
                 btns, text=SDR_MODE_LABELS[mode], font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
                 bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT, activeforeground="#1a1200",
@@ -3859,7 +4214,7 @@ class App(tk.Tk):
                 font=theme.FONT_BODY, highlightthickness=0, command=self._sdr_sched_show,
             ).pack(side="left", padx=(0, 16))
 
-        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "openwebrx")]
+        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "beacon", "openwebrx")]
         self._sdr_label_to_mode = {v: k for k, v in SDR_MODE_LABELS.items()}
 
         editors = tk.Frame(plan, bg=theme.BG_CARD)

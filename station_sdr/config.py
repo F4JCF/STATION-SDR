@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
     "port_svxlink": 5007,
     "port_winlink": 8080,
     "port_monitor": 5008,
+    "port_beacon": 5009,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,

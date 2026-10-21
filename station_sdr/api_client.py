@@ -165,6 +165,25 @@ def get_pi_update_status(host: str, port: int) -> dict:
     return resp.json()
 
 
+def get_beacon(host: str, port: int, what: str):
+    """Service beacon406 : status, frames ou bursts."""
+    resp = requests.get(f"http://{host}:{port}/api/beacon/{what}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def beacon_decode(host: str, port: int, hex_frame: str) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/beacon/decode", params={"hex": hex_frame}, timeout=25)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def beacon_clear(host: str, port: int) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/beacon/clear", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_sdr_mode(host: str, port: int) -> dict:
     """Mode actuel de la clé SDR (sdr_switch.py)."""
     url = f"http://{host}:{port}/api/sdr/mode"

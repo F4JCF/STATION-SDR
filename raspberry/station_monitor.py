@@ -50,7 +50,7 @@ DEFAULT_CONFIG = {
     "email": {"enabled": False, "smtp_host": "mail.infomaniak.com", "smtp_port": 465, "ssl": True,
               "user": "", "password": "", "to": ""},
     "events": {"squawk": True, "sart": True, "aprs_msg": True, "winlink": True,
-               "undervoltage": True, "dongle": True, "vigilance": True},
+               "undervoltage": True, "dongle": True, "vigilance": True, "beacon": True, "beacon_test": True},
     # Vigilance Météo-France : clé gratuite à créer sur portail-api.meteofrance.fr
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
@@ -63,6 +63,8 @@ EVENT_LABELS = {
     "undervoltage": "Sous-tension du Pi",
     "dongle": "Clé SDR disparue de l'USB",
     "vigilance": "Vigilance Météo-France orange ou rouge",
+    "beacon": "Balise de détresse 406 MHz (émission réelle)",
+    "beacon_test": "Balise 406 MHz en mode test / exercice",
 }
 VIGI_URL = "https://public-api.meteofrance.fr/public/DPVigilance/v1/cartevigilance/encours"
 VIGI_PHENOMENA = {
@@ -375,6 +377,26 @@ def collect_once(state: dict) -> None:
             frm = frm.get("Addr", "") if isinstance(frm, dict) else str(frm or "")
             notify(f"Winlink — message de {frm}", f"Objet : {m.get('Subject') or '(sans objet)'}", 3, "winlink")
 
+    beacons = fetch_json("http://127.0.0.1:5009/api/beacon/frames?limit=20") or []
+    for f in beacons if isinstance(beacons, list) else []:
+        if f.get("manual") or time.time() - (f.get("time") or 0) > 3600:
+            continue
+        test = bool(f.get("test"))
+        if not event_once(f"b406:{f.get('hex_id')}:{test}", 3600 if test else 600):
+            continue
+        pos = ""
+        if f.get("lat") is not None:
+            pos = (f"\nPosition : {f['lat']:.5f}, {f['lon']:.5f}  ({f.get('distance_km')} km, "
+                   f"relèvement {f.get('bearing_deg')}°)")
+        body = (f"Hex ID {f.get('hex_id')} · {f.get('protocol') or '?'} · {f.get('country') or '?'}\n"
+                f"{f.get('identification') or ''}{pos}"
+                + (f"\n{f.get('freq_mhz')} MHz, SNR {f.get('snr_db')} dB" if f.get("freq_mhz") else ""))
+        if test:
+            notify("Balise 406 — trame de TEST / exercice", body, 3, "beacon_test")
+        else:
+            notify("BALISE 406 — ÉMISSION RÉELLE", body + "\nVérifier : alerte possible en cours (CROSS / ARCC).",
+                   5, "beacon")
+
     if th.get("under_voltage_now") and event_once("undervolt", 6 * 3600):
         notify("Pi en sous-tension", "Le Raspberry Pi manque de courant : la clé SDR risque de décrocher.\n"
                "Remède : hub USB alimenté et/ou alimentation 5,1 V / 2,5 A.", 4, "undervoltage")
@@ -565,7 +587,7 @@ button:disabled{opacity:.5}
 <div class="card"><div class="lbl">Vigilance Météo-France</div><div id="vigi" class="muted">—</div></div>
 <div class="card"><div class="lbl">Dernières alertes</div><div id="alerts" class="muted">—</div></div>
 <script>
-const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",off:"Arrêtée"};
+const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",off:"Arrêtée"};
 const VC={1:["#3fb950","VERT"],2:["#eab308","JAUNE"],3:["#f97316","ORANGE"],4:["#f85149","ROUGE"]};
 let busy=false;
 function tile(l,v,c,s){return `<div class="tile"><div class="lbl">${l}</div><div class="big ${c||""}">${v}</div>${s?`<div class="muted" style="font-size:12px">${s}</div>`:""}</div>`}
@@ -583,7 +605,7 @@ function render(d){
   document.getElementById("mode").innerHTML=m.mode==="off"?'<span class="red">Arrêtée</span>':`<span style="color:var(--accent)">${L[m.mode]||"—"}</span>`;
   const sched={manual:"manuel",rotation:"rotation",planning:"planning horaire"}[(m.schedule||{}).type]||"—";
   document.getElementById("modeinfo").textContent=m.mode==="off"?"tous les modules sont arrêtés":"partage : "+sched;
-  let b="";for(const k of ["adsb","ais","aprs","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
+  let b="";for(const k of ["adsb","ais","aprs","beacon","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
     b+=`<button class="${k===m.mode?"on":""}" ${(!ok||busy)?"disabled":""} onclick="setMode('${k}')">${L[k]}</button>`}
   b+=`<button class="stop" ${(m.mode==="off"||busy)?"disabled":""} onclick="setMode('off')">■ Arrêter</button>`;
   document.getElementById("btns").innerHTML=b;
@@ -701,7 +723,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, public_config(update_config(data if isinstance(data, dict) else {})))
         elif path.startswith("/api/dash/sdr/"):
             mode = path.rsplit("/", 1)[-1]
-            if mode not in ("adsb", "ais", "aprs", "openwebrx", "off"):
+            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "off"):
                 self._send(400, {"error": "module inconnu"})
                 return
             try:

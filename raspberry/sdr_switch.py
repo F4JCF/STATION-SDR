@@ -43,9 +43,12 @@ CANDIDATES = {
     "aprs": ["direwolf"],
     # OpenWebRX tourne dans un conteneur Docker sur ce Pi.
     "openwebrx": ["openwebrx", "docker:openwebrx"],
+    # Décodage des balises de détresse 406 MHz (écoute seule).
+    "beacon": ["beacon406"],
 }
 
-LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "off": "Arrêtée"}
+LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
+          "off": "Arrêtée"}
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
@@ -354,6 +357,7 @@ LOG_UNITS = {
     "readsb": "ADS-B (readsb)", "direwolf": "APRS (Direwolf)", "ais-catcher": "AIS (AIS-catcher)",
     "svxlink": "SvxLink", "aprs-api": "API APRS", "svxlink-api": "API SvxLink", "sdr-switch": "Bascule de clé",
     "station-monitor": "Surveillance / notifications", "pat@f4jcf": "Winlink (Pat)", "docker:openwebrx": "OpenWebRX",
+    "beacon406": "Balises 406 MHz",
 }
 
 # Fichiers de configuration inclus dans la sauvegarde.
@@ -426,6 +430,8 @@ PI_FILES = [
     ("raspberry/svxlink-api.service", "/etc/systemd/system/svxlink-api.service", 0o644),
     ("raspberry/aprs-api.service", "/etc/systemd/system/aprs-api.service", 0o644),
     ("raspberry/direwolf-sdr.conf", "/etc/systemd/system/direwolf.service.d/sdr.conf", 0o644),
+    ("raspberry/beacon406_api.py", "/usr/local/bin/beacon406_api.py", 0o755),
+    ("raspberry/beacon406.service", "/etc/systemd/system/beacon406.service", 0o644),
 ]
 PI_VERSION_FILE = os.path.join(STATE_DIR, "pi_version")
 _update_state = {"running": False, "log": [], "result": None}
@@ -483,6 +489,9 @@ def _update_pi(ref: str) -> None:
             if _systemctl("is-enabled", f"{unit}.service").stdout.strip() == "enabled":
                 _systemctl("restart", f"{unit}.service")
                 say(f"  {unit} redémarré")
+        if _systemctl("is-active", "beacon406.service").stdout.strip() == "active":
+            _systemctl("restart", "beacon406.service")
+            say("  beacon406 redémarré")
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(PI_VERSION_FILE, "w", encoding="utf-8") as f:
             f.write(ref)
