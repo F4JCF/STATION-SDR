@@ -1129,19 +1129,33 @@ class App(tk.Tk):
         def worker():
             try:
                 result = api_client.set_sdr_mode(host, port, mode)
-                error = None if result.get("ok", True) else "échec du démarrage"
+                if result.get("ok", True):
+                    error = None
+                else:
+                    failed = ", ".join(result.get("failed") or []) or label
+                    error = (f"le service {failed} n'a pas pu démarrer (clé débranchée, ou logiciel absent du Pi ?)"
+                             if result.get("failed") else f"aucun service démarré pour {label}")
+            except requests.HTTPError as exc:
+                try:
+                    error = exc.response.json().get("error") or str(exc)
+                except Exception:
+                    error = str(exc)
+                if "aucun service installé" in error:
+                    error += " — le logiciel de ce module n'est pas encore installé sur le Pi"
             except Exception as exc:
-                result, error = None, str(exc)
+                error = f"service de bascule du Pi injoignable ({exc})"
             self.after(0, done, error)
 
         def done(error):
             self._sdr_switching = False
+            self._sdr_switch_error = (mode, error, time.time()) if error else None
             if error is None:
                 self._sdr_mode = mode
                 self.chip_sdr.config(text=f"Clé SDR : {label}")
                 self._refresh_all_tiles()
             else:
-                self.chip_sdr.config(text="Clé SDR : bascule indisponible")
+                self.chip_sdr.config(text="Clé SDR : bascule impossible")
+                messagebox.showwarning("Clé SDR", f"Impossible de donner la clé à {label} :\n\n{error}")
             if then:
                 # Laisse le temps au service web (OpenWebRX) de démarrer.
                 self.after(4000 if error is None else 0, then)
@@ -3696,6 +3710,8 @@ class App(tk.Tk):
         self.b406_pill = theme.pill(row, "INCONNU", theme.MUTED)
         self.b406_pill.pack(side="left", padx=(12, 0))
         ttk.Button(row, text="Effacer l'historique", style="Flat.TButton", command=self._beacon_clear).pack(side="right")
+        ttk.Button(row, text="Écouter le 406 MHz", style="Accent.TButton",
+                   command=lambda: self._switch_sdr("beacon")).pack(side="right", padx=(0, 8))
         self.b406_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                                   justify="left", anchor="w", wraplength=760)
         self.b406_info.pack(anchor="w", pady=(6, 0))
@@ -3811,11 +3827,15 @@ class App(tk.Tk):
             return
         mode = getattr(self, "_sdr_mode", None)
         if error:
-            if mode not in (None, "beacon"):
+            sw = getattr(self, "_sdr_switch_error", None)
+            if sw and sw[0] == "beacon":
+                self.b406_pill.config(text="  BASCULE IMPOSSIBLE  ", bg=theme.RED)
+                self.b406_info.config(text=f"La clé n'a pas pu passer sur le 406 MHz : {sw[1]}", fg=theme.ORANGE)
+            elif mode not in (None, "beacon"):
                 txt = "EN PAUSE" if mode != "off" else "CLÉ ARRÊTÉE"
                 self.b406_pill.config(text=f"  {txt}  ", bg=theme.MUTED)
-                self.b406_info.config(text=(f"La clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)} : ouvrez cette page "
-                                            "pour lui donner la clé et écouter le 406 MHz."))
+                self.b406_info.config(text=(f"La clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)}. Cliquez sur "
+                                            "« Écouter le 406 MHz » pour lui donner la clé."), fg=theme.MUTED)
             else:
                 self.b406_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
                 self.b406_info.config(text="Le service beacon406 (port 5009) ne répond pas — installez-le sur le Pi "
