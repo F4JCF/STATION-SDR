@@ -7,6 +7,7 @@ périodiquement en arrière-plan, plus mise à jour automatique au démarrage.
 """
 
 import io
+import json
 import math
 from datetime import datetime
 import re
@@ -37,6 +38,8 @@ if not hasattr(Image, "ANTIALIAS"):
 from . import api_client, theme, updater
 from .config import load_config, save_config
 from .version import __version__
+from .aircraft_db import RouteCache, TarDb
+from .icao_ranges import icao_country
 
 APP_TITLE = f"STATION-SDR v{__version__}"
 
@@ -139,23 +142,6 @@ def _haversine_nm(lat1, lon1, lat2, lon2):
     return 2 * 6371.0088 * math.asin(math.sqrt(a)) / 1.852  # km -> nm
 
 
-def _alt_color(alt_ft):
-    """Couleur par tranche d'altitude, dans l'esprit du dégradé de tar1090."""
-    try:
-        alt = float(alt_ft)
-    except (TypeError, ValueError):
-        return "#8b96a5"  # altitude inconnue / au sol
-    if alt < 5000:
-        return "#f85149"
-    if alt < 15000:
-        return "#d29922"
-    if alt < 25000:
-        return "#3fb950"
-    if alt < 35000:
-        return "#4aa3ff"
-    return "#b15bff"
-
-
 _SOURCE_LABELS = {
     "adsb_icao": "ADS-B", "adsb_icao_nt": "ADS-B", "adsb_other": "ADS-B",
     "adsr_icao": "ADS-R", "adsr_other": "ADS-R",
@@ -173,31 +159,107 @@ def _source_label(type_code):
 _PLANE_ICON_CACHE = {}
 
 
-def _plane_icon(alt_ft, track, size=22):
-    """Icône avion (triangle simple) colorée par altitude et orientée selon
-    le cap. Mise en cache par (couleur, cap arrondi) pour éviter de
-    regénérer une image à chaque rafraîchissement."""
+# Échelle de couleurs d'altitude de tar1090 (teinte interpolée selon
+# l'altitude, luminosité selon la teinte) pour retrouver les mêmes couleurs.
+_ALT_HUE = [(0, 20), (2000, 32.5), (4000, 43), (6000, 54), (8000, 72), (9000, 85), (11000, 140),
+            (40000, 300), (51000, 360)]
+_HUE_LIGHT = [(0, 53), (20, 50), (32, 54), (40, 52), (46, 51), (50, 46), (60, 43), (80, 41), (100, 41),
+              (120, 41), (140, 41), (160, 40), (180, 40), (190, 44), (198, 50), (200, 58), (220, 58),
+              (240, 58), (255, 55), (266, 55), (270, 58), (280, 58), (290, 47), (300, 43), (310, 48),
+              (320, 48), (340, 52), (360, 53)]
+
+
+def _interp(table, x):
+    if x <= table[0][0]:
+        return table[0][1]
+    for (x0, y0), (x1, y1) in zip(table, table[1:]):
+        if x <= x1:
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    return table[-1][1]
+
+
+def _hsl_hex(h, s, l):
+    import colorsys
+    r, g, b = colorsys.hls_to_rgb((h % 360) / 360, l / 100, s / 100)
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+
+def _alt_color(alt_ft):
+    """Couleur d'un avion selon son altitude, identique à tar1090."""
+    if alt_ft == "ground":
+        return _hsl_hex(220, 0, 30)
+    try:
+        alt = float(alt_ft)
+    except (TypeError, ValueError):
+        return _hsl_hex(0, 0, 75)
+    hue = _interp(_ALT_HUE, alt)
+    return _hsl_hex(hue, 88, _interp(_HUE_LIGHT, hue))
+
+
+# Silhouette d'avion (nez vers le haut), coordonnées relatives 0..1.
+_PLANE_SHAPE = [(0.50, 0.02), (0.56, 0.11), (0.56, 0.37), (0.96, 0.57), (0.96, 0.65), (0.56, 0.53),
+                (0.555, 0.79), (0.70, 0.89), (0.70, 0.95), (0.50, 0.90), (0.30, 0.95), (0.30, 0.89),
+                (0.445, 0.79), (0.44, 0.53), (0.04, 0.65), (0.04, 0.57), (0.44, 0.37), (0.44, 0.11)]
+
+
+def _plane_icon(alt_ft, track, size=26, selected=False):
+    """Icône avion colorée par altitude (échelle tar1090) et orientée selon
+    la route. Dessinée en grand puis réduite (bords lissés), mise en cache."""
     color = _alt_color(alt_ft)
     try:
-        heading = round(float(track)) % 360
+        heading = round(float(track) / 5) * 5 % 360
     except (TypeError, ValueError):
         heading = 0
-    cache_key = (color, heading)
+    size = size + 8 if selected else size
+    cache_key = (color, heading, size, selected)
     cached = _PLANE_ICON_CACHE.get(cache_key)
     if cached is not None:
         return cached
-
-    base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(base)
-    cx = size / 2
-    draw.polygon(
-        [(cx, 1), (size - 2, size - 4), (cx, size - 9), (2, size - 4)],
-        fill=color, outline="#0b0f17",
-    )
-    rotated = base.rotate(-heading, resample=Image.BICUBIC, expand=False)
-    photo = ImageTk.PhotoImage(rotated)
+    big = size * 4
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    pts = [(x * big, y * big) for x, y in _PLANE_SHAPE]
+    draw.polygon(pts, fill=color, outline="#ffffff" if selected else "#0b0f17", width=8 if selected else 4)
+    img = img.rotate(-heading, resample=Image.BICUBIC).resize((size, size), Image.LANCZOS)
+    photo = ImageTk.PhotoImage(img)
     _PLANE_ICON_CACHE[cache_key] = photo
     return photo
+
+
+def _bearing_deg(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+_FLAG_IMAGES = {}
+
+
+def _flag_image(code):
+    """Petit drapeau (21×14) du pays d'immatriculation ; drapeaux MIT de
+    country-flag-icons, repris de tar1090."""
+    if not code:
+        return None
+    code = code.lower()
+    if code in _FLAG_IMAGES:
+        return _FLAG_IMAGES[code]
+    if "_data" not in _FLAG_IMAGES:
+        try:
+            with open(_resource_path("assets/flags.json"), "r", encoding="utf-8") as f:
+                _FLAG_IMAGES["_data"] = json.load(f)
+        except Exception:
+            _FLAG_IMAGES["_data"] = {}
+    b64 = _FLAG_IMAGES["_data"].get(code)
+    img = None
+    if b64:
+        try:
+            img = tk.PhotoImage(data=b64)
+        except tk.TclError:
+            img = None
+    _FLAG_IMAGES[code] = img
+    return img
 
 
 def _hex_to_rgb(hex_color: str) -> tuple:
@@ -1093,6 +1155,9 @@ class App(tk.Tk):
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
 
         self._current_view = key
+        if key == "aircraft" and not getattr(self, "_adsb_poll_running", False):
+            self._adsb_poll_running = True
+            self._adsb_poll()
         if key == "stats" and not getattr(self, "_stats_poll_running", False):
             self._stats_poll_running = True
             self._stats_poll()
@@ -1381,109 +1446,155 @@ class App(tk.Tk):
         outer_wrapper = tk.Frame(frame, bg=theme.BG)
         outer_wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # Même disposition que la page Météo : colonne de gauche (liste +
-        # fiche détaillée, largeur naturelle) et carte à droite occupant
-        # tout le reste en largeur ET en hauteur.
-        wrapper = tk.Frame(outer_wrapper, bg=theme.BG)
+        # Colonne de gauche (liste + fiche détaillée) et carte à droite,
+        # comme tar1090.
+        wrapper = tk.Frame(outer_wrapper, bg=theme.BG, width=780)
         wrapper.pack(side="left", fill="y", pady=(0, 6))
+        wrapper.pack_propagate(False)
 
         top_row = tk.Frame(wrapper, bg=theme.BG)
-        top_row.pack(fill="x", padx=12, pady=(8, 6))
+        top_row.pack(fill="x", padx=12, pady=(8, 4))
         self.aircraft_count_label = tk.Label(
-            top_row, text="Avions détectés : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
+            top_row, text="Avions : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
         )
         self.aircraft_count_label.pack(side="left")
-
+        self.aircraft_stats_label = tk.Label(top_row, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.aircraft_stats_label.pack(side="left", padx=(12, 0))
         ttk.Button(
             top_row, text="Carte web tar1090", style="Flat.TButton",
             command=lambda: self._open_url(
                 f"http://{self.config_data.get('pi_host', '192.168.1.229')}:{self.config_data.get('port_adsb', 8504)}/"
             ),
-        ).pack(side="right", padx=(8, 0))
+        ).pack(side="right")
 
-        search_box = tk.Frame(top_row, bg=theme.BG)
-        search_box.pack(side="right")
-        tk.Label(
-            search_box, text="Rechercher (indicatif / hex) :", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-        ).pack(side="left", padx=(0, 6))
+        search_row = tk.Frame(wrapper, bg=theme.BG)
+        search_row.pack(fill="x", padx=12, pady=(0, 4))
+        tk.Label(search_row, text="Rechercher (indicatif, hex, immat., type) :", bg=theme.BG, fg=theme.MUTED,
+                 font=theme.FONT_SUBTITLE).pack(side="left", padx=(0, 6))
         self.aircraft_search_var = tk.StringVar()
         self.aircraft_search_var.trace_add("write", lambda *_a: self._repaint_aircraft())
-        ttk.Entry(search_box, textvariable=self.aircraft_search_var, width=14).pack(side="left")
+        ttk.Entry(search_row, textvariable=self.aircraft_search_var, width=18).pack(side="left")
+        legend = tk.Frame(search_row, bg=theme.BG)
+        legend.pack(side="right")
+        for txt, col in (("ADS-B", "#4aa3ff"), ("MLAT", "#e3b341"), ("TIS-B", "#f47067"), ("Mode S", "#8b96a5")):
+            tk.Label(legend, text=f" {txt} ", bg=theme.BG_CARD_ALT, fg=col, font=("Segoe UI", 8, "bold")).pack(side="left", padx=2)
 
         table_outer = theme.card(wrapper)
-        table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 6))
-        columns = ("flight", "hex", "alt", "gs", "track", "squawk")
-        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=8)
+        table_outer.pack(fill="x", padx=12, pady=(0, 6))
+        columns = ("flight", "route", "type", "squawk", "alt", "gs", "dist", "rssi")
+        self.aircraft_tree = ttk.Treeview(table_outer.inner, columns=columns, show="tree headings", height=6)
+        self.aircraft_tree.column("#0", width=36, minwidth=36, stretch=False, anchor="center")
+        self.aircraft_tree.heading("#0", text="", command=lambda: self._aircraft_sort_by("country"))
         headings = {
-            "flight": "Indicatif", "hex": "Hex", "alt": "Altitude (ft)",
-            "gs": "Vitesse (kt)", "track": "Cap (°)", "squawk": "Squawk",
+            "flight": ("Indicatif", 92, "w"), "route": ("Route", 84, "center"), "type": ("Type", 58, "center"),
+            "squawk": ("Squawk", 62, "center"), "alt": ("Alt. (ft)", 82, "e"), "gs": ("Vit. (kt)", 66, "e"),
+            "dist": ("Dist. (NM)", 74, "e"), "rssi": ("RSSI", 56, "e"),
         }
         for col in columns:
-            self.aircraft_tree.heading(col, text=headings[col])
-            self.aircraft_tree.column(col, width=95, minwidth=60, anchor="center")
+            title, width, anchor = headings[col]
+            self.aircraft_tree.heading(col, text=title, command=lambda c=col: self._aircraft_sort_by(c))
+            self.aircraft_tree.column(col, width=width, minwidth=40, anchor=anchor)
+        self.aircraft_tree.tag_configure("mlat", foreground="#e3b341")
+        self.aircraft_tree.tag_configure("tisb", foreground="#f47067")
+        self.aircraft_tree.tag_configure("modes", foreground="#8b96a5")
+        self.aircraft_tree.tag_configure("emerg", background="#5a1f22", foreground="#ffffff")
+        vsb = ttk.Scrollbar(table_outer.inner, orient="vertical", command=self.aircraft_tree.yview)
+        self.aircraft_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
         self.aircraft_tree.pack(fill="both", expand=True, padx=1, pady=1)
         self.aircraft_tree.bind("<<TreeviewSelect>>", self._on_aircraft_tree_select)
+        self._aircraft_sort = ("dist", False)
 
+        # --- Fiche détaillée façon tar1090
         detail_outer = theme.card(wrapper)
-        detail_outer.pack(fill="x", padx=12, pady=(0, 6))
-        detail_inner = detail_outer.inner
-        detail_inner.configure(padding=8)
+        detail_outer.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        d = detail_outer.inner
+        d.configure(padding=8)
 
-        self.aircraft_photo_label = tk.Label(
-            detail_inner, bg=theme.BG_CARD_ALT, fg=theme.MUTED, text="—",
-            font=theme.FONT_SUBTITLE, width=20, height=6,
-        )
-        self.aircraft_photo_label.pack(side="left", padx=(0, 14))
-
-        text_frame = tk.Frame(detail_inner, bg=theme.BG_CARD)
-        text_frame.pack(side="left", fill="both", expand=True)
+        head = tk.Frame(d, bg=theme.BG_CARD)
+        head.pack(fill="x")
+        id_col = tk.Frame(head, bg=theme.BG_CARD)
+        id_col.pack(side="left", fill="both", expand=True)
         self.aircraft_detail_title = tk.Label(
-            text_frame, text="Cliquez un avion (carte ou tableau) pour voir son détail.",
-            bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD, anchor="w", justify="left",
+            id_col, text="Cliquez un avion (carte ou tableau).", bg=theme.BG_CARD, fg=theme.TEXT,
+            font=("Segoe UI", 16, "bold"), anchor="w",
         )
         self.aircraft_detail_title.pack(anchor="w")
+        flag_row = tk.Frame(id_col, bg=theme.BG_CARD)
+        flag_row.pack(anchor="w")
+        self.aircraft_detail_flag = tk.Label(flag_row, bg=theme.BG_CARD)
+        self.aircraft_detail_flag.pack(side="left")
+        self.aircraft_detail_hex = tk.Label(flag_row, text="", bg=theme.BG_CARD, fg=theme.MUTED,
+                                            font=("Consolas", 10), anchor="w")
+        self.aircraft_detail_hex.pack(side="left", padx=(6, 0))
+        self.aircraft_detail_airline = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.TEXT,
+                                                font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=720)
+        self.aircraft_detail_airline.pack(anchor="w", pady=(2, 0))
+        self.aircraft_detail_route = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.ACCENT,
+                                              font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=720)
+        self.aircraft_detail_route.pack(anchor="w", pady=(2, 0))
+        self.aircraft_detail_enriched = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.MUTED,
+                                                 font=theme.FONT_SUBTITLE, anchor="w", justify="left", wraplength=720)
+        self.aircraft_detail_enriched.pack(anchor="w", pady=(2, 0))
 
-        # Grille de champs façon tar1090 (spatial / signal), remplie au
-        # clic sur un avion (carte ou tableau).
-        fields_frame = tk.Frame(text_frame, bg=theme.BG_CARD)
-        fields_frame.pack(anchor="w", fill="x", pady=(6, 0))
-        detail_field_titles = [
-            ("gs", "Vitesse sol"), ("position", "Position"),
-            ("alt_baro", "Altitude baro."), ("distance", "Distance station"),
-            ("alt_geom", "Altitude géo."), ("source", "Source"),
-            ("vrate", "Vitesse verticale"), ("rssi", "Signal (RSSI)"),
-            ("track", "Cap"), ("messages", "Messages"),
-            ("squawk", "Squawk"), ("seen", "Vu / position il y a"),
+        grid = tk.Frame(d, bg=theme.BG_CARD)
+        grid.pack(fill="both", expand=True, pady=(4, 0))
+        sections = [
+            ("IDENTIFICATION", [("reg", "Immatriculation"), ("country", "Pays"), ("typecode", "Type"),
+                                ("typedesc", "Désignation"), ("category", "Catégorie"), ("dbflags", "Indicateurs")]),
+            ("SPATIAL", [("gs", "Vitesse sol"), ("alt_baro", "Altitude baro."), ("alt_geom", "Altitude WGS84"),
+                         ("vrate", "Vitesse verticale"), ("track", "Route"), ("position", "Position"),
+                         ("distance", "Distance / relèvement")]),
+            ("SIGNAL", [("source", "Source"), ("rssi", "RSSI"), ("msgrate", "Débit"), ("messages", "Messages"),
+                        ("lastpos", "Dernière position"), ("seen", "Dernière réception"), ("squawk", "Squawk")]),
+            ("FMS SEL", [("sel_alt", "Altitude sélectionnée"), ("sel_head", "Cap sélectionné"),
+                         ("qnh", "QNH"), ("modes", "Modes")]),
+            ("DONNÉES AIR", [("ias", "Vitesse indiquée"), ("tas", "Vitesse propre"), ("mach", "Mach"),
+                             ("wind", "Vent"), ("temp", "OAT / TAT"), ("roll", "Inclinaison")]),
         ]
         self.aircraft_detail_value_labels = {}
-        for i, (key, title) in enumerate(detail_field_titles):
-            r, c = divmod(i, 4)
-            cell = tk.Frame(fields_frame, bg=theme.BG_CARD)
-            cell.grid(row=r, column=c, sticky="w", padx=(0, 16), pady=1)
-            tk.Label(
-                cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
-            ).pack(anchor="w")
-            value_label = tk.Label(cell, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY)
-            value_label.pack(anchor="w")
-            self.aircraft_detail_value_labels[key] = value_label
-
-        self.aircraft_detail_enriched = tk.Label(
-            text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
-            anchor="w", justify="left", wraplength=400,
+        placement = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
+        # La photo occupe la dernière case (ligne 2, colonne 3).
+        for (title, fields), (r, c) in zip(sections, placement):
+            grid.grid_columnconfigure(c, weight=1, uniform="ad")
+            box = tk.Frame(grid, bg=theme.BG_CARD)
+            box.grid(row=r, column=c, sticky="nsew", padx=3, pady=2)
+            tk.Label(box, text=title, bg="#1f4e5f", fg="#ffffff", font=("Segoe UI", 8, "bold"),
+                     anchor="center").pack(fill="x")
+            body = tk.Frame(box, bg=theme.BG_CARD)
+            body.pack(fill="x", pady=(2, 0))
+            body.grid_columnconfigure(1, weight=1)
+            for i, (key, label) in enumerate(fields):
+                tk.Label(body, text=label + " :", bg=theme.BG_CARD, fg=theme.MUTED, pady=0,
+                         font=("Segoe UI", 8), anchor="w").grid(row=i, column=0, sticky="w")
+                v = tk.Label(body, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 8, "bold"),
+                             anchor="e", pady=0)
+                v.grid(row=i, column=1, sticky="e")
+                self.aircraft_detail_value_labels[key] = v
+        photo_box = tk.Frame(grid, bg=theme.BG_CARD)
+        photo_box.grid(row=1, column=2, sticky="nsew", padx=3, pady=2)
+        self.aircraft_photo_label = tk.Label(
+            photo_box, bg=theme.BG_CARD_ALT, fg=theme.MUTED, text="—", font=theme.FONT_SUBTITLE, width=24, height=6,
         )
-        self.aircraft_detail_enriched.pack(anchor="w", pady=(6, 0))
-        self.aircraft_detail_credit = tk.Label(
-            text_frame, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8), anchor="w",
-        )
-        self.aircraft_detail_credit.pack(anchor="w", pady=(4, 0))
+        self.aircraft_photo_label.pack(anchor="center", pady=(2, 0))
+        self.aircraft_detail_credit = tk.Label(photo_box, text="", bg=theme.BG_CARD, fg=theme.MUTED,
+                                               font=("Segoe UI", 7), anchor="center")
+        self.aircraft_detail_credit.pack(anchor="center")
 
-        map_outer = theme.card(outer_wrapper)
-        map_outer.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
+        # --- Carte + légende d'altitude
+        right = tk.Frame(outer_wrapper, bg=theme.BG)
+        right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
+        map_outer = theme.card(right)
+        map_outer.pack(fill="both", expand=True)
         self.aircraft_map = TkinterMapView(map_outer.inner, corner_radius=0)
         self.aircraft_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.aircraft_map.set_position(lat, lon)
-        self.aircraft_map.set_zoom(8)
+        self.aircraft_map.set_zoom(7)
+        self._draw_range_rings()
+        self.aircraft_legend = tk.Canvas(right, height=36, bg=theme.BG, highlightthickness=0)
+        self.aircraft_legend.pack(fill="x", pady=(4, 0))
+        self.aircraft_legend.bind("<Configure>", lambda _e: self._draw_alt_legend())
 
         self._aircraft_icon_refs = []
         self._aircraft_trails = {}
@@ -1492,90 +1603,219 @@ class App(tk.Tk):
         self._current_photo_image = None
         self._last_aircraft_full = []
         self._last_aircraft_by_hex = {}
+        self._ac_msg_hist = {}
+        self._ac_msg_rate = {}
+        self._adsb_total_prev = None
+        self._adsb_msg_rate = None
+        self._adsb_poll_running = False
+        self.tardb = TarDb(lambda: f"http://{self.config_data.get('pi_host', '192.168.1.229')}:"
+                                   f"{self.config_data.get('port_adsb', 8504)}")
+        self.routes = RouteCache()
 
-    # -- Sélection d'un avion (carte ou tableau) et infos enrichies --
+    # -- Carte : cercles de distance et légende
+
+    def _draw_range_rings(self):
+        lat0, lon0 = DEFAULT_COORDS
+        for nm in (50, 100, 150):
+            r_lat = nm / 60.0
+            r_lon = r_lat / math.cos(math.radians(lat0))
+            pts = [(lat0 + r_lat * math.sin(math.radians(a)), lon0 + r_lon * math.cos(math.radians(a)))
+                   for a in range(0, 361, 5)]
+            self.aircraft_map.set_polygon(pts, outline_color="#222222", fill_color=None, border_width=1)
+            self.aircraft_map.set_marker(lat0 - r_lat, lon0, text=f"{nm} NM", text_color="#333333",
+                                         icon=self._blank_icon(), icon_anchor="center")
+        self._station_icon = self._station_marker_icon()
+        self.aircraft_map.set_marker(lat0, lon0, icon=self._station_icon, icon_anchor="center")
+
+    def _blank_icon(self):
+        if not hasattr(self, "_blank_photo"):
+            self._blank_photo = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0)))
+        return self._blank_photo
+
+    def _station_marker_icon(self):
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(img)
+        dr.ellipse([16, 16, 48, 48], fill="#0b0f17")
+        dr.ellipse([22, 22, 42, 42], fill="#ffffff")
+        return ImageTk.PhotoImage(img.resize((16, 16), Image.LANCZOS))
+
+    def _draw_alt_legend(self):
+        c = self.aircraft_legend
+        c.delete("all")
+        w = max(c.winfo_width(), 300)
+        left, right = 90, 20
+        span = w - left - right
+        c.create_text(4, 12, text="ALTITUDE (ft)", anchor="w", fill=theme.MUTED, font=("Segoe UI", 8, "bold"))
+        marks = [0, 500, 1000, 2000, 4000, 6000, 8000, 10000, 20000, 30000, 40000]
+
+        def x_of(alt):  # échelle non linéaire comme tar1090 (détail en basse altitude)
+            pos = _interp([(m, i / (len(marks) - 1)) for i, m in enumerate(marks)], alt)
+            return left + pos * span
+
+        steps = 120
+        for i in range(steps):
+            a0 = _interp([(0, 0), (1, 40000)], i / steps)
+            a1 = _interp([(0, 0), (1, 40000)], (i + 1) / steps)
+            c.create_rectangle(x_of(a0), 4, x_of(a1) + 1, 18, fill=_alt_color(a0), outline="")
+        for m in marks:
+            x = x_of(m)
+            c.create_line(x, 4, x, 21, fill=theme.BG)
+            c.create_text(x, 29, text=(f"{m // 1000} 000" if m >= 1000 else str(m)) + ("+" if m == 40000 else ""),
+                          fill=theme.MUTED, font=("Segoe UI", 7))
+
+    # -- Tri, sélection
+
+    def _aircraft_sort_by(self, col):
+        cur, desc = self._aircraft_sort
+        self._aircraft_sort = (col, not desc if cur == col else False)
+        self._repaint_aircraft()
 
     def _on_aircraft_tree_select(self, _event):
         selection = self.aircraft_tree.selection()
-        if not selection:
+        if not selection or selection[0] == self._selected_aircraft_hex:
             return
         ac = self._last_aircraft_by_hex.get(selection[0])
         if ac:
             self._show_aircraft_detail_data(ac)
+            if ac.get("lat") is not None and ac.get("lon") is not None:
+                self.aircraft_map.set_position(ac["lat"], ac["lon"])
+            self._repaint_aircraft(keep_selection=True)
 
     def _on_aircraft_marker_click(self, marker):
-        self._show_aircraft_detail_data(marker.data)
+        ac = marker.data
+        if isinstance(ac, dict):
+            self._show_aircraft_detail_data(ac)
+            self._repaint_aircraft()
+
+    # -- Fiche
+
+    @staticmethod
+    def _ac_alt(ac):
+        alt = ac.get("alt_baro")
+        return 0 if alt == "ground" else alt if isinstance(alt, (int, float)) else None
+
+    def _ac_route_text(self, ac, short=True):
+        route = self.routes.get(ac.get("flight"))
+        if not route:
+            return ""
+        aps = route["airports"]
+        if short:
+            return "-".join((a.get("iata") or a.get("icao") or "?") for a in aps)
+        return "  →  ".join(f"{a.get('icao') or ''} {a.get('city') or a.get('name') or ''}".strip() for a in aps) + \
+            ("" if route.get("plausible", True) else "  (à confirmer)")
 
     def _show_aircraft_detail_data(self, ac):
         hx = ac.get("hex")
-        flight = (ac.get("flight") or "").strip() or hx or "—"
         self._selected_aircraft_hex = hx
-
-        self.aircraft_detail_title.config(text=f"{flight}  ·  hex {(hx or '—').upper()}")
-
-        gs = ac.get("gs")
-        lat, lon = ac.get("lat"), ac.get("lon")
-        station_lat, station_lon = DEFAULT_COORDS
-        distance_nm = _haversine_nm(station_lat, station_lon, lat, lon) if lat is not None and lon is not None else None
-        vert_rate = ac.get("baro_rate")
-        if vert_rate is None:
-            vert_rate = ac.get("geom_rate")
-
-        values = {
-            "gs": f"{_fmt(gs)} kt ({_fmt(_kt_to_kmh(gs))} km/h)",
-            "position": f"{lat:.3f}°, {lon:.3f}°" if lat is not None and lon is not None else "—",
-            "alt_baro": f"{_fmt(ac.get('alt_baro'))} ft",
-            "distance": f"{distance_nm:.1f} nm" if distance_nm is not None else "—",
-            "alt_geom": f"{_fmt(ac.get('alt_geom'))} ft",
-            "source": _source_label(ac.get("type")),
-            "vrate": f"{_fmt(vert_rate)} ft/min",
-            "rssi": f"{_fmt(ac.get('rssi'))} dBFS",
-            "track": f"{_fmt(ac.get('track'))}°",
-            "messages": _fmt(ac.get("messages")),
-            "squawk": _fmt(ac.get("squawk")),
-            "seen": f"{_fmt(ac.get('seen'))} s / {_fmt(ac.get('seen_pos'))} s",
-        }
-        for key, label in self.aircraft_detail_value_labels.items():
-            label.config(text=values.get(key, "—"))
-
+        self._refresh_aircraft_detail()
         cached = self._aircraft_info_cache.get(hx) if hx else None
-        if cached == "loading":
-            self.aircraft_detail_enriched.config(text="Recherche des informations avion...")
-        elif cached:
+        if cached and cached != "loading":
             self._apply_enriched_info(hx, cached)
-        else:
-            self.aircraft_detail_enriched.config(text="Recherche des informations avion...")
+        elif not cached:
             self.aircraft_detail_credit.config(text="")
             self._current_photo_image = None
-            self.aircraft_photo_label.config(image="", text="—")
+            self.aircraft_photo_label.config(image="", text="Recherche de la photo…")
             if hx:
                 self._aircraft_info_cache[hx] = "loading"
                 threading.Thread(target=self._fetch_aircraft_info, args=(hx,), daemon=True).start()
 
+    def _refresh_aircraft_detail(self):
+        hx = self._selected_aircraft_hex
+        ac = self._last_aircraft_by_hex.get(hx) if hx else None
+        if not ac:
+            return
+        db = self.tardb.get(hx)
+        flight = (ac.get("flight") or "").strip()
+        reg = ac.get("r") or db.get("r")
+        typ = ac.get("t") or db.get("t")
+        country, ccode = icao_country(hx)
+        self.aircraft_detail_title.config(text=flight or reg or hx.upper())
+        flag = _flag_image(ccode)
+        self.aircraft_detail_flag.config(image=flag or "")
+        self.aircraft_detail_flag.image = flag
+        self.aircraft_detail_hex.config(text=f"Hex {hx.upper()}" + (f"  ·  {country}" if country else ""))
+        airline = self.tardb.airline(flight, reg)
+        hexinfo = self._aircraft_info_cache.get(hx) if isinstance(self._aircraft_info_cache.get(hx), dict) else {}
+        self.aircraft_detail_airline.config(
+            text=(airline or {}).get("n") or (hexinfo or {}).get("operator") or "",
+        )
+        self.aircraft_detail_route.config(text=self._ac_route_text(ac, short=False))
+
+        num = lambda k: ac.get(k) if isinstance(ac.get(k), (int, float)) else None
+        lat, lon = num("lat"), num("lon")
+        slat, slon = DEFAULT_COORDS
+        dist = _haversine_nm(slat, slon, lat, lon) if lat is not None and lon is not None else None
+        brg = _bearing_deg(slat, slon, lat, lon) if dist is not None else None
+        vr = num("baro_rate") if num("baro_rate") is not None else num("geom_rate")
+        alt = ac.get("alt_baro")
+        rate = self._ac_msg_rate.get(hx)
+        wd, ws = num("wd"), num("ws")
+        oat, tat = num("oat"), num("tat")
+        modes = ac.get("nav_modes") or []
+        mode_names = {"autopilot": "AP", "vnav": "VNAV", "althold": "ALT", "approach": "APP", "lnav": "LNAV",
+                      "tcas": "TCAS"}
+        cat = ac.get("category")
+        cat_names = {"A1": "léger", "A2": "petit", "A3": "gros", "A4": "B757", "A5": "lourd", "A6": "très performant",
+                     "A7": "hélicoptère", "B1": "planeur", "B2": "ballon", "B4": "ULM", "B6": "drone",
+                     "C1": "véhicule d'urgence", "C2": "véhicule de service", "C3": "obstacle"}
+        values = {
+            "reg": reg or "—",
+            "country": country or "—",
+            "typecode": " · ".join(x for x in (typ, db.get("long") or ac.get("desc")) if x) or "—",
+            "typedesc": " · ".join(x for x in (db.get("desc"), f"turbulence {db['wtc']}" if db.get("wtc") else None) if x) or "—",
+            "category": f"{cat} ({cat_names.get(cat, '?')})" if cat else "—",
+            "dbflags": ", ".join(db.get("flags") or []) or ("aucun" if db else "—"),
+            "gs": f"{num('gs'):.0f} kt ({num('gs') * 1.852:.0f} km/h)" if num("gs") is not None else "—",
+            "alt_baro": "au sol" if alt == "ground" else (f"{alt:,.0f} ft".replace(",", " ") if num("alt_baro") is not None else "—"),
+            "alt_geom": f"{num('alt_geom'):,.0f} ft".replace(",", " ") if num("alt_geom") is not None else "—",
+            "vrate": f"{vr:+.0f} ft/min" if vr is not None else "—",
+            "track": f"{num('track'):.1f}°" if num("track") is not None else "—",
+            "position": f"{lat:.3f}°, {lon:.3f}°" if lat is not None else "—",
+            "distance": f"{dist:.1f} NM / {brg:.0f}°" if dist is not None else "—",
+            "source": _source_label(ac.get("type")),
+            "rssi": f"{num('rssi'):.1f} dBFS" if num("rssi") is not None else "—",
+            "msgrate": f"{rate:.1f} msg/s" if rate is not None else "—",
+            "messages": f"{ac.get('messages', 0):,}".replace(",", " ") if ac.get("messages") is not None else "—",
+            "lastpos": f"{num('seen_pos'):.1f} s" if num("seen_pos") is not None else "—",
+            "seen": f"{num('seen'):.1f} s" if num("seen") is not None else "—",
+            "squawk": str(ac.get("squawk") or "—") + (f"  ({self.SQUAWK_ALERTS[ac['squawk']]})" if ac.get("squawk") in self.SQUAWK_ALERTS else ""),
+            "sel_alt": f"{num('nav_altitude_mcp'):,.0f} ft".replace(",", " ") if num("nav_altitude_mcp") is not None else
+                       (f"{num('nav_altitude_fms'):,.0f} ft (FMS)".replace(",", " ") if num("nav_altitude_fms") is not None else "—"),
+            "sel_head": f"{num('nav_heading'):.1f}°" if num("nav_heading") is not None else "—",
+            "qnh": f"{num('nav_qnh'):.1f} hPa" if num("nav_qnh") is not None else "—",
+            "modes": " ".join(mode_names.get(m, m) for m in modes) or "—",
+            "ias": f"{num('ias'):.0f} kt" if num("ias") is not None else "—",
+            "tas": f"{num('tas'):.0f} kt" if num("tas") is not None else "—",
+            "mach": f"{num('mach'):.3f}" if num("mach") is not None else "—",
+            "wind": f"{wd:.0f}° / {ws:.0f} kt" if wd is not None and ws is not None else "—",
+            "temp": " / ".join(f"{t:.0f} °C" for t in (oat, tat) if t is not None) or "—",
+            "roll": f"{num('roll'):.1f}°" if num("roll") is not None else "—",
+        }
+        for key, label in self.aircraft_detail_value_labels.items():
+            v = values.get(key, "—")
+            label.config(text=v, fg=theme.RED if key == "squawk" and ac.get("squawk") in self.SQUAWK_ALERTS else theme.TEXT)
+
     def _fetch_aircraft_info(self, hx):
-        """Interroge hexdb.io (type/compagnie/immatriculation) et
-        planespotters.net (photo) — services publics tiers, gratuits et
-        sans clé, utilisés notamment par tar1090 pour ces mêmes données."""
+        """Photo (planespotters.net) et, en secours si la base tar1090 du Pi
+        ne connaît pas l'avion, type/compagnie via hexdb.io."""
         info = {"type": None, "operator": None, "registration": None,
                 "photo_url": None, "photographer": None, "_photo_image": None}
-
-        try:
-            resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{hx}", timeout=6)
-            if resp.ok:
-                data = resp.json()
-                if isinstance(data, dict):
-                    info["type"] = data.get("ModelFullName") or data.get("Type") or data.get("ICAOTypeCode")
-                    info["operator"] = data.get("RegisteredOwners") or data.get("OperatorFlagCode")
-                    info["registration"] = data.get("Registration")
-        except (requests.RequestException, ValueError):
-            pass
-
+        if not self.tardb.get(hx):
+            try:
+                resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{hx}", timeout=6)
+                if resp.ok:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        info["type"] = data.get("ModelFullName") or data.get("Type") or data.get("ICAOTypeCode")
+                        info["operator"] = data.get("RegisteredOwners") or data.get("OperatorFlagCode")
+                        info["registration"] = data.get("Registration")
+            except (requests.RequestException, ValueError):
+                pass
         photo_url = None
         try:
             resp = requests.get(f"https://api.planespotters.net/pub/photos/hex/{hx}", timeout=6)
             if resp.ok:
-                payload = resp.json()
-                photos = payload.get("photos") or []
+                photos = resp.json().get("photos") or []
                 if photos:
                     p = photos[0]
                     thumb = p.get("thumbnail_large") or p.get("thumbnail") or {}
@@ -1583,53 +1823,58 @@ class App(tk.Tk):
                     info["photographer"] = p.get("photographer")
         except (requests.RequestException, ValueError):
             pass
-
         if photo_url:
             try:
                 img_resp = requests.get(photo_url, timeout=8)
                 img_resp.raise_for_status()
                 img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
-                img.thumbnail((160, 110))
-                info["_photo_image"] = ImageTk.PhotoImage(img)
+                img.thumbnail((180, 120))
+                info["_photo"] = img
             except Exception:
-                info["_photo_image"] = None
+                info["_photo"] = None
+        self.after(0, self._finish_aircraft_info, hx, info)
 
+    def _finish_aircraft_info(self, hx, info):
+        if info.get("_photo") is not None:
+            info["_photo_image"] = ImageTk.PhotoImage(info.pop("_photo"))
         self._aircraft_info_cache[hx] = info
-        self.after(0, self._apply_enriched_info, hx, info)
+        self._apply_enriched_info(hx, info)
 
     def _apply_enriched_info(self, hx, info):
         if hx != self._selected_aircraft_hex:
-            return  # une autre sélection a eu lieu entre-temps
-
-        parts = []
-        if info.get("operator"):
-            parts.append(info["operator"])
-        if info.get("type"):
-            parts.append(info["type"])
-        if info.get("registration"):
-            parts.append(f"immat. {info['registration']}")
-        self.aircraft_detail_enriched.config(
-            text=" · ".join(parts) if parts else "Informations avion indisponibles (hexdb.io).",
-        )
-
+            return
+        extra = [x for x in (info.get("registration"), info.get("type")) if x and not self.tardb.get(hx)]
+        self.aircraft_detail_enriched.config(text=" · ".join(extra) + ("  (hexdb.io)" if extra else ""))
         photo_image = info.get("_photo_image")
         if photo_image is not None:
             self._current_photo_image = photo_image
-            self.aircraft_photo_label.config(image=photo_image, text="")
+            self.aircraft_photo_label.config(image=photo_image, text="", width=180, height=120)
             credit = info.get("photographer")
             self.aircraft_detail_credit.config(
-                text=f"Photo © {credit} — planespotters.net" if credit else "Photo : planespotters.net",
-            )
+                text=f"Photo © {credit} — planespotters.net" if credit else "Photo : planespotters.net")
         else:
             self._current_photo_image = None
-            self.aircraft_photo_label.config(image="", text="Pas de photo")
+            self.aircraft_photo_label.config(image="", text="Pas de photo", width=24, height=6)
             self.aircraft_detail_credit.config(text="")
+        self._refresh_aircraft_detail()
 
-    # -- Rendu --
+    # -- Données
+
+    def _adsb_poll(self):
+        """Rafraîchissement rapide (3 s) tant que la page est affichée."""
+        if getattr(self, "_current_view", None) != "aircraft":
+            self._adsb_poll_running = False
+            return
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_adsb", 8504)
+        threading.Thread(target=self._fetch, args=(lambda: api_client.get_aircraft(host, port), self._render_aircraft),
+                         daemon=True).start()
+        self.after(3000, self._adsb_poll)
 
     def _render_aircraft(self, data, error):
         if error:
-            self.aircraft_count_label.config(text="Avions détectés : indisponible")
+            self.aircraft_count_label.config(text="Avions : indisponible")
+            self.aircraft_stats_label.config(text="")
             self._last_aircraft_full = []
             self._last_aircraft_by_hex = {}
             self._repaint_aircraft()
@@ -1638,72 +1883,154 @@ class App(tk.Tk):
             self.chip_aircraft.config(text="Avions : —")
             return
 
-        aircraft = data.get("aircraft", [])
+        now = data.get("now") or time.time()
+        aircraft = [ac for ac in data.get("aircraft", []) if (ac.get("seen") or 0) < 60]
         self._last_aircraft_full = aircraft
         self._last_aircraft_by_hex = {ac["hex"]: ac for ac in aircraft if ac.get("hex")}
+
+        # Débits de messages (global et par avion), comme tar1090.
+        total = data.get("messages")
+        if isinstance(total, (int, float)):
+            prev = self._adsb_total_prev
+            if prev and now > prev[1] and total >= prev[0]:
+                self._adsb_msg_rate = (total - prev[0]) / (now - prev[1])
+            self._adsb_total_prev = (total, now)
+        hist = {}
+        for ac in aircraft:
+            hx, msgs = ac.get("hex"), ac.get("messages")
+            if hx and isinstance(msgs, int):
+                old = self._ac_msg_hist.get(hx)
+                if old and now > old[1] and msgs >= old[0]:
+                    self._ac_msg_rate[hx] = (msgs - old[0]) / (now - old[1])
+                hist[hx] = (msgs, now)
+        self._ac_msg_hist = hist
 
         new_trails = {}
         for ac in aircraft:
             hx, lat, lon = ac.get("hex"), ac.get("lat"), ac.get("lon")
             if hx and lat is not None and lon is not None:
-                trail = self._aircraft_trails.get(hx) or deque(maxlen=15)
-                trail.append((lat, lon))
+                trail = self._aircraft_trails.get(hx) or deque(maxlen=60)
+                if not trail or trail[-1][:2] != (lat, lon):
+                    trail.append((lat, lon, ac.get("alt_baro")))
                 new_trails[hx] = trail
         self._aircraft_trails = new_trails
 
-        self.aircraft_count_label.config(text=f"Avions détectés : {len(aircraft)}")
+        self.tardb.request([ac.get("hex") for ac in aircraft])
+        self.routes.request([(ac.get("flight"), ac.get("lat"), ac.get("lon")) for ac in aircraft])
+
+        with_pos = sum(1 for ac in aircraft if ac.get("lat") is not None)
+        self.aircraft_count_label.config(text=f"Avions : {len(aircraft)}")
+        rate = f"  ·  Messages : {self._adsb_msg_rate:.1f}/s" if self._adsb_msg_rate is not None else ""
+        self.aircraft_stats_label.config(text=f"Avec position : {with_pos}{rate}")
         self._check_aircraft_alerts(aircraft)
         if "aircraft" in self.tile_chips:
             self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)")
         self.chip_aircraft.config(text=f"Avions : {len(aircraft)}")
 
-        self._repaint_aircraft()
+        self._repaint_aircraft(keep_selection=True)
+        self._refresh_aircraft_detail()
 
-    def _repaint_aircraft(self):
+    def _repaint_aircraft(self, keep_selection=True):
+        if not hasattr(self, "aircraft_tree"):
+            return
         query = self.aircraft_search_var.get().strip().lower()
+        aircraft = self._last_aircraft_full
         if query:
-            aircraft = [
-                ac for ac in self._last_aircraft_full
-                if query in (ac.get("flight") or "").strip().lower() or query in (ac.get("hex") or "").lower()
-            ]
-        else:
-            aircraft = self._last_aircraft_full
+            def match(ac):
+                db = self.tardb.get(ac.get("hex"))
+                hay = " ".join(str(x or "") for x in (ac.get("flight"), ac.get("hex"), ac.get("r") or db.get("r"),
+                                                      ac.get("t") or db.get("t"))).lower()
+                return query in hay
+            aircraft = [ac for ac in aircraft if match(ac)]
 
-        for item in self.aircraft_tree.get_children():
-            self.aircraft_tree.delete(item)
-        self.aircraft_map.delete_all_marker()
-        self.aircraft_map.delete_all_path()
-        self._aircraft_icon_refs = []
+        slat, slon = DEFAULT_COORDS
 
+        def dist_of(ac):
+            if ac.get("lat") is None or ac.get("lon") is None:
+                return None
+            return _haversine_nm(slat, slon, ac["lat"], ac["lon"])
+
+        col, desc = self._aircraft_sort
+
+        def key(ac):
+            db = self.tardb.get(ac.get("hex"))
+            vals = {
+                "flight": (ac.get("flight") or "").strip() or "~",
+                "route": self._ac_route_text(ac) or "~",
+                "type": ac.get("t") or db.get("t") or "~",
+                "squawk": str(ac.get("squawk") or "~"),
+                "alt": self._ac_alt(ac),
+                "gs": ac.get("gs"),
+                "dist": dist_of(ac),
+                "rssi": ac.get("rssi"),
+                "country": icao_country(ac.get("hex"))[1] or "~",
+            }
+            v = vals.get(col)
+            if isinstance(v, str):
+                return (0, v)
+            return (0 if v is not None else 1, v if v is not None else 0)
+        aircraft = sorted(aircraft, key=key, reverse=desc)
+        if col not in ("flight", "route", "type", "squawk", "country") and desc:
+            aircraft = [a for a in aircraft if key(a)[0] == 0] + [a for a in aircraft if key(a)[0] == 1]
+
+        tree = self.aircraft_tree
+        tree.delete(*tree.get_children())
         for ac in aircraft:
-            flight = (ac.get("flight") or "").strip() or "—"
             hx = ac.get("hex")
-            row_kwargs = {"iid": hx} if hx else {}
-            try:
-                self.aircraft_tree.insert(
-                    "", "end",
-                    values=(flight, hx or "—", ac.get("alt_baro", "—"),
-                            ac.get("gs", "—"), ac.get("track", "—"), ac.get("squawk", "—")),
-                    **row_kwargs,
-                )
-            except tk.TclError:
-                self.aircraft_tree.insert(
-                    "", "end",
-                    values=(flight, hx or "—", ac.get("alt_baro", "—"),
-                            ac.get("gs", "—"), ac.get("track", "—"), ac.get("squawk", "—")),
-                )
+            if not hx or tree.exists(hx):
+                continue
+            db = self.tardb.get(hx)
+            alt = ac.get("alt_baro")
+            vr = ac.get("baro_rate") if ac.get("baro_rate") is not None else ac.get("geom_rate")
+            arrow = "▲ " if isinstance(vr, (int, float)) and vr > 256 else "▼ " if isinstance(vr, (int, float)) and vr < -256 else ""
+            alt_txt = "sol" if alt == "ground" else (f"{arrow}{alt:,.0f}".replace(",", " ") if isinstance(alt, (int, float)) else "")
+            d = dist_of(ac)
+            src = str(ac.get("type") or "")
+            tags = ["mlat"] if src == "mlat" else ["tisb"] if src.startswith("tisb") else ["modes"] if src == "mode_s" else []
+            if ac.get("squawk") in self.SQUAWK_ALERTS:
+                tags.append("emerg")
+            flag = _flag_image(icao_country(hx)[1])
+            tree.insert(
+                "", "end", iid=hx, image=flag or "", tags=tags,
+                values=(
+                    (ac.get("flight") or "").strip() or ac.get("r") or db.get("r") or "",
+                    self._ac_route_text(ac), ac.get("t") or db.get("t") or "", ac.get("squawk") or "",
+                    alt_txt, f"{ac['gs']:.0f}" if isinstance(ac.get("gs"), (int, float)) else "",
+                    f"{d:.1f}" if d is not None else "",
+                    f"{ac['rssi']:.1f}" if isinstance(ac.get("rssi"), (int, float)) else "",
+                ),
+            )
+        if keep_selection and self._selected_aircraft_hex and tree.exists(self._selected_aircraft_hex):
+            tree.selection_set(self._selected_aircraft_hex)
 
+        # Carte
+        self.aircraft_map.delete_all_path()
+        for m in list(getattr(self, "_aircraft_markers", [])):
+            try:
+                m.delete()
+            except Exception:
+                pass
+        self._aircraft_markers = []
+        self._aircraft_icon_refs = []
+        sel = self._selected_aircraft_hex
+        for ac in aircraft:
             lat, lon = ac.get("lat"), ac.get("lon")
-            if lat is not None and lon is not None:
-                icon = _plane_icon(ac.get("alt_baro"), ac.get("track"))
-                self._aircraft_icon_refs.append(icon)
-                self.aircraft_map.set_marker(
-                    lat, lon, text=flight, icon=icon, icon_anchor="center",
-                    data=ac, command=self._on_aircraft_marker_click,
-                )
-                trail = self._aircraft_trails.get(hx)
-                if trail and len(trail) >= 2:
-                    self.aircraft_map.set_path(list(trail), color=_alt_color(ac.get("alt_baro")), width=2)
+            if lat is None or lon is None:
+                continue
+            hx = ac.get("hex")
+            is_sel = hx == sel
+            trail = self._aircraft_trails.get(hx)
+            if trail and len(trail) >= 2:
+                pts = list(trail) if is_sel else list(trail)[-12:]
+                for p0, p1 in zip(pts, pts[1:]):
+                    self.aircraft_map.set_path([p0[:2], p1[:2]], color=_alt_color(p1[2]), width=3 if is_sel else 2)
+            icon = _plane_icon(ac.get("alt_baro"), ac.get("track"), selected=is_sel)
+            self._aircraft_icon_refs.append(icon)
+            label = (ac.get("flight") or "").strip() if is_sel else None
+            self._aircraft_markers.append(self.aircraft_map.set_marker(
+                lat, lon, text=label, icon=icon, icon_anchor="center",
+                data=ac, command=self._on_aircraft_marker_click,
+            ))
 
     # ----------------------------------------------------------- APRS --
 

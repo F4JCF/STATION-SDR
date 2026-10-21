@@ -39,6 +39,7 @@ jobs:
             --icon station_sdr/assets/icon.ico `
             --add-data "station_sdr/assets/logo.png;assets" `
             --add-data "station_sdr/assets/icon.ico;assets" `
+            --add-data "station_sdr/assets/flags.json;assets" `
             --hidden-import pystray._win32 `
             --collect-all tkintermapview --collect-all PIL run.py
 
