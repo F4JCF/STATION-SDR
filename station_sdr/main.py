@@ -39,6 +39,7 @@ from . import api_client, theme, updater
 from .config import load_config, save_config
 from .version import __version__
 from .aircraft_db import RouteCache, TarDb
+from . import map_tiles
 from .icao_ranges import icao_country
 
 APP_TITLE = f"STATION-SDR v{__version__}"
@@ -656,6 +657,8 @@ class App(tk.Tk):
         self._last_services = {}
 
         theme.apply_dark_theme(self)
+        map_tiles.install()
+        self._all_maps = []
         self._alert_init()
         self._build_menu()
         self._build_header()
@@ -775,6 +778,37 @@ class App(tk.Tk):
         else:
             self._on_close()
 
+    # ------------------------------------------------------- Fonds de carte --
+
+    def _make_map(self, parent):
+        """Carte avec le fond choisi (OpenStreetMap, Plan IGN, photos IGN)
+        et la mention de source obligatoire en bas à droite."""
+        m = TkinterMapView(parent, corner_radius=0)
+        credit = tk.Label(parent, text="", bg="#ffffff", fg="#333333", font=("Segoe UI", 7), padx=3)
+        credit.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
+        m._credit_label = credit
+        self._all_maps.append(m)
+        self._apply_map_style(m)
+        return m
+
+    def _apply_map_style(self, m):
+        style = map_tiles.STYLES.get(self.config_data.get("map_style", "osm"), map_tiles.STYLES["osm"])
+        m.set_tile_server(style["url"], max_zoom=style["max_zoom"])
+        m._credit_label.config(text=style["credit"])
+        m._credit_label.lift()
+
+    def _set_map_style(self, key):
+        self.config_data["map_style"] = key
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+        for m in self._all_maps:
+            try:
+                self._apply_map_style(m)
+            except Exception:
+                pass
+
     # ---------------------------------------------------------------- UI --
 
     def _build_menu(self):
@@ -788,6 +822,12 @@ class App(tk.Tk):
                                  command=self._toggle_alert_sound)
         app_menu.add_command(label="Historique des alertes", command=self._show_alert_history)
         app_menu.add_separator()
+        map_menu = tk.Menu(app_menu, tearoff=0)
+        self._map_style_var = tk.StringVar(value=self.config_data.get("map_style", "osm"))
+        for key, st in map_tiles.STYLES.items():
+            map_menu.add_radiobutton(label=st["label"], value=key, variable=self._map_style_var,
+                                     command=lambda k=key: self._set_map_style(k))
+        app_menu.add_cascade(label="Fond de carte", menu=map_menu)
         app_menu.add_command(label="Arrêter la clé SDR", command=lambda: self._stop_sdr())
         app_menu.add_separator()
         self._autostart_var = tk.BooleanVar(value=self._autostart_enabled())
@@ -1333,7 +1373,7 @@ class App(tk.Tk):
 
         map_outer = theme.card(wrapper)
         map_outer.pack(side="left", fill="both", expand=True, pady=12, padx=(0, 12))
-        self.weather_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.weather_map = self._make_map(map_outer.inner)
         self.weather_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.weather_map.set_position(lat, lon)
@@ -1615,7 +1655,7 @@ class App(tk.Tk):
         right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
         map_outer = theme.card(right)
         map_outer.pack(fill="both", expand=True)
-        self.aircraft_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.aircraft_map = self._make_map(map_outer.inner)
         self.aircraft_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.aircraft_map.set_position(lat, lon)
@@ -2107,7 +2147,7 @@ class App(tk.Tk):
 
         map_outer = theme.card(wrapper)
         map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.aprs_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.aprs_map = self._make_map(map_outer.inner)
         self.aprs_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.aprs_map.set_position(lat, lon)
@@ -2311,7 +2351,7 @@ class App(tk.Tk):
         # --- Carte
         map_outer = theme.card(outer_wrapper)
         map_outer.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
-        self.ais_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.ais_map = self._make_map(map_outer.inner)
         self.ais_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
         self.ais_map.set_position(lat, lon)
@@ -3773,7 +3813,7 @@ class App(tk.Tk):
         right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
         map_outer = theme.card(right)
         map_outer.pack(fill="both", expand=True)
-        self.b406_map = TkinterMapView(map_outer.inner, corner_radius=0)
+        self.b406_map = self._make_map(map_outer.inner)
         self.b406_map.pack(fill="both", expand=True, padx=1, pady=1)
         self.b406_map.set_position(*DEFAULT_COORDS)
         self.b406_map.set_zoom(7)
