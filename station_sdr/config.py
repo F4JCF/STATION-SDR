@@ -26,6 +26,8 @@ DEFAULT_CONFIG = {
     "port_winlink": 8080,
     "port_monitor": 5008,
     "port_beacon": 5009,
+    "lora_igate_host": "192.168.1.154",
+    "port_433": 5010,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,

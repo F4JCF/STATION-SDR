@@ -1,0 +1,16 @@
+[Unit]
+Description=APRS via l'ISS (145,825 MHz, rtl_fm + Direwolf, ecoute seule)
+After=network-online.target
+Conflicts=direwolf.service
+
+[Service]
+Type=simple
+User=root
+# Meme configuration que l'APRS 144,800 (meme port KISS 8001 : l'API APRS du
+# Pi recoit donc aussi les paquets relayes par l'ISS).
+ExecStart=/bin/sh -c 'rtl_fm -d 0 -f 145.825M -s 24000 -g 40 - | /usr/bin/direwolf -c /etc/direwolf.conf -r 24000 -D 1 -t 0 -'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

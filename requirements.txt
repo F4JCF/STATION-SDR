@@ -2,3 +2,4 @@ requests>=2.31
 tkintermapview>=1.29
 Pillow>=10.0
 pystray>=0.19; sys_platform == 'win32'
+sgp4>=2.22

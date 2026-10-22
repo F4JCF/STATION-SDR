@@ -215,3 +215,17 @@ Compile le décodeur dec406 (Fabrice Morel, MIT) pour RTL-SDR et installe
 bascule de clé SDR : ouvrir la page « Balises de détresse » écoute
 406,0–406,1 MHz et décode les balises 1G et 2G (ELT, EPIRB, PLB, essais).
 Écoute seule : rien n'est émis.
+
+## Capteurs 433 MHz et APRS via l'ISS
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_extras.sh | sudo bash
+```
+
+Installe rtl_433 (paquet Debian) et `rtl433_api.py` (port 5010), ainsi que
+`direwolf-iss.service` (APRS sur 145,825 MHz, même port KISS que l'APRS
+144,800). Deux nouveaux modules dans la bascule de clé : « Capteurs 433 »
+et « APRS ISS ». Les passages de satellites sont calculés par l'appli
+(SGP4, éléments CelesTrak) ; elle peut basculer seule sur l'ISS pendant
+ses passages. L'iGate LoRa F4JCF-10 est lu directement depuis le PC
+(`received-packets.json`, `stations.json`).

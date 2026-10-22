@@ -39,7 +39,7 @@ from . import api_client, theme, updater
 from .config import load_config, save_config
 from .version import __version__
 from .aircraft_db import RouteCache, TarDb
-from . import map_tiles
+from . import aprs_parse, map_tiles, sat_predict
 from .icao_ranges import icao_country
 
 APP_TITLE = f"STATION-SDR v{__version__}"
@@ -90,9 +90,11 @@ WEATHER_MAP_DEFAULT_ZOOM = 11
 HOME_TILES = [
     ("weather", "Météo", "Relevé METAR local"),
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
-    ("aprs", "APRS", "Direwolf — réception de paquets"),
+    ("aprs", "APRS", "iGate LoRa + VHF 144,800"),
     ("ais", "AIS", "Trafic maritime"),
     ("beacon", "Balises de détresse", "406 MHz · décodage COSPAS-SARSAT"),
+    ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
+    ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Clé SDR", "Pilotage et partage automatique"),
     ("svxlink", "SvxLink", "Relais vocal / Echolink"),
@@ -112,9 +114,10 @@ MODULE_SDR_MODE = {
     "aprs": "aprs",
     "openwebrx": "openwebrx",
     "beacon": "beacon",
+    "s433": "433",
 }
 SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-                   "off": "arrêtée"}
+                   "433": "Capteurs 433", "iss": "APRS ISS", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -364,6 +367,18 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
         d.ellipse([*pt(0.44, 0.62), *pt(0.56, 0.74)], fill=color)
         d.arc([*pt(0.22, 0.02), *pt(0.78, 0.40)], start=200, end=340, fill=color, width=lw)
         d.arc([*pt(0.06, -0.10), *pt(0.94, 0.52)], start=210, end=330, fill=color, width=lw)
+    elif key == "s433":
+        # thermomètre + ondes
+        d.rounded_rectangle([*pt(0.40, 0.08), *pt(0.56, 0.66)], radius=size * 0.08, outline=color, width=lw)
+        d.ellipse([*pt(0.34, 0.62), *pt(0.62, 0.92)], outline=color, width=lw)
+        d.arc([*pt(0.58, 0.18), *pt(0.86, 0.54)], start=300, end=60, fill=color, width=lw)
+        d.arc([*pt(0.64, 0.08), *pt(1.02, 0.64)], start=300, end=60, fill=color, width=lw)
+    elif key == "sats":
+        # satellite : corps + panneaux + orbite
+        d.rectangle([*pt(0.42, 0.40), *pt(0.58, 0.60)], outline=color, width=lw)
+        d.rectangle([*pt(0.10, 0.44), *pt(0.36, 0.56)], outline=color, width=lw)
+        d.rectangle([*pt(0.64, 0.44), *pt(0.90, 0.56)], outline=color, width=lw)
+        d.arc([*pt(0.04, 0.14), *pt(0.96, 0.86)], start=200, end=340, fill=color, width=max(1, lw - 1))
     elif key == "stats":
         d.line([pt(0.10, 0.90), pt(0.92, 0.90)], fill=color, width=lw)
         d.line([pt(0.10, 0.10), pt(0.10, 0.90)], fill=color, width=lw)
@@ -615,7 +630,11 @@ class _TileChip:
     def refresh(self):
         mode = MODULE_SDR_MODE.get(self.key)
         current = getattr(self.app, "_sdr_mode", None)
-        if mode and current and mode != current:
+        if self.key == "aprs" and mode and current and mode != current:
+            # le LoRa (iGate) fonctionne sans la clé SDR : seule la VHF est en pause
+            self.label.config(text=f" {self.text} · VHF en pause ", fg=theme.TEXT, bg=theme.BG_CARD_ALT)
+            self.frame.config(bg=theme.BORDER)
+        elif mode and current and mode != current:
             self.label.config(
                 text=(" En pause · clé SDR arrêtée " if current == "off"
                       else f" En pause · clé sur {SDR_MODE_LABELS.get(current, current)} "), fg=theme.MUTED,
@@ -957,6 +976,8 @@ class App(tk.Tk):
         self._build_winlink_tab(self.pages["winlink"])
         self._build_ais_tab(self.pages["ais"])
         self._build_beacon_tab(self.pages["beacon"])
+        self._build_s433_tab(self.pages["s433"])
+        self._build_sat_tab(self.pages["sats"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
         self._build_health_tab(self.pages["health"])
@@ -1092,15 +1113,16 @@ class App(tk.Tk):
         grid.pack(fill="both", expand=True, padx=4, pady=4)
 
         self.tile_chips = {}
-        columns = 7
+        columns = 6
         self.tile_frames = {}
+        for c in range(columns):
+            grid.grid_columnconfigure(c, weight=1, uniform="tiles")
         for i, (key, title, subtitle) in enumerate(HOME_TILES):
             r, c = divmod(i, columns)
-            grid.grid_columnconfigure(c, weight=1)
             outer = theme.card(grid)
-            outer.grid(row=r, column=c, sticky="nsew", padx=10, pady=10)
+            outer.grid(row=r, column=c, sticky="nsew", padx=6, pady=6)
             inner = outer.inner
-            inner.configure(padding=18)
+            inner.configure(padding=12)
 
             header_row = tk.Frame(inner, bg=theme.BG_CARD)
             header_row.pack(anchor="w", fill="x")
@@ -1114,9 +1136,9 @@ class App(tk.Tk):
             title_label.pack(side="left")
             subtitle_label = tk.Label(
                 inner, text=subtitle, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                wraplength=220, justify="left",
+                wraplength=250, justify="left",
             )
-            subtitle_label.pack(anchor="w", pady=(4, 10))
+            subtitle_label.pack(anchor="w", pady=(2, 6))
             chip_label = theme.chip(inner, "—")
             chip_label.pack(anchor="w")
             self.tile_chips[key] = _TileChip(self, key, chip_label, outer)
@@ -1220,6 +1242,14 @@ class App(tk.Tk):
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
 
         self._current_view = key
+        if key == "s433" and not getattr(self, "_s433_poll_running", False):
+            self._s433_poll_running = True
+            self._s433_poll()
+        if key == "sats":
+            self._sat_tick(reschedule=False)
+        if key == "aprs" and not getattr(self, "_aprs_poll_running", False):
+            self._aprs_poll_running = True
+            self._aprs_poll()
         if key == "beacon" and not getattr(self, "_b406_poll_running", False):
             self._b406_poll_running = True
             self._beacon_poll()
@@ -1270,6 +1300,8 @@ class App(tk.Tk):
         )
         self._fetch(lambda: api_client.get_aprs_stations(host, cfg["port_aprs"]), self._render_aprs_stations)
         self._fetch(lambda: api_client.get_aprs_packets(host, cfg["port_aprs"]), self._render_aprs_packets)
+        self._fetch(lambda: api_client.get_aprs_packets(host, cfg["port_aprs"]), self._render_aprs_packets_log)
+        self._fetch_lora()
         self._fetch(lambda: api_client.get_ais_ships(host, cfg.get("port_ais", 8100)), self._render_ais)
         self._fetch(
             lambda: api_client.get_sdr_mode(host, cfg.get("port_sdr_switch", 5006)), self._render_sdr_mode,
@@ -1277,6 +1309,7 @@ class App(tk.Tk):
         self._fetch_winlink()
         self._fetch_vigilance()
         self._fetch_beacon(frames_only=getattr(self, "_current_view", None) != "beacon")
+        self._fetch_s433()
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -2104,91 +2137,334 @@ class App(tk.Tk):
     # ----------------------------------------------------------- APRS --
 
     def _build_aprs_tab(self, frame):
-        wrapper = tk.Frame(frame, bg=theme.BG)
-        wrapper.pack(fill="both", expand=True, padx=4, pady=4)
+        outer = tk.Frame(frame, bg=theme.BG)
+        outer.pack(fill="both", expand=True, padx=4, pady=4)
+        left = tk.Frame(outer, bg=theme.BG, width=860)
+        left.pack(side="left", fill="y", pady=(0, 6))
+        left.pack_propagate(False)
 
-        status_outer = theme.card(wrapper)
-        status_outer.pack(fill="x", padx=12, pady=12)
-        status_inner = status_outer.inner
-        status_inner.configure(padding=16)
+        st_outer = theme.card(left)
+        st_outer.pack(fill="x", padx=12, pady=(8, 6))
+        st = st_outer.inner
+        st.configure(padding=12)
+        r1 = tk.Frame(st, bg=theme.BG_CARD)
+        r1.pack(fill="x")
+        tk.Label(r1, text="LoRa 433,775 MHz (iGate F4JCF-10)", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_BODY_BOLD).pack(side="left")
+        self.lora_badge = theme.pill(r1, "INCONNU", theme.MUTED)
+        self.lora_badge.pack(side="left", padx=(10, 0))
+        ttk.Button(r1, text="Page de l'iGate", style="Flat.TButton",
+                   command=lambda: self._open_url(f"http://{self.config_data.get('lora_igate_host', '192.168.1.154')}/")
+                   ).pack(side="right")
+        self.lora_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, anchor="w")
+        self.lora_info.pack(anchor="w", pady=(2, 8))
+        r2 = tk.Frame(st, bg=theme.BG_CARD)
+        r2.pack(fill="x")
+        tk.Label(r2, text="VHF 144,800 MHz (Direwolf, clé SDR)", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_BODY_BOLD).pack(side="left")
+        self.aprs_badge = theme.pill(r2, "INCONNU", theme.MUTED)
+        self.aprs_badge.pack(side="left", padx=(10, 0))
+        ttk.Button(r2, text="Redémarrer Direwolf", style="Flat.TButton",
+                   command=lambda: self._restart_service("direwolf")).pack(side="right")
+        ttk.Button(r2, text="Carte aprs.fi (F4JCF-10)", style="Flat.TButton",
+                   command=lambda: self._open_url("https://aprs.fi/#!call=a%2FF4JCF-10&timerange=3600&tail=3600")
+                   ).pack(side="right", padx=(0, 8))
+        self.aprs_vhf_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, anchor="w")
+        self.aprs_vhf_info.pack(anchor="w", pady=(2, 0))
 
-        tk.Label(
-            status_inner, text="APRS (Direwolf)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
-        ).pack(side="left")
-        self.aprs_badge = theme.pill(status_inner, "INCONNU", theme.MUTED)
-        self.aprs_badge.pack(side="left", padx=(12, 0))
-        ttk.Button(
-            status_inner, text="Redémarrer Direwolf", style="Flat.TButton",
-            command=lambda: self._restart_service("direwolf"),
-        ).pack(side="right")
-        ttk.Button(
-            status_inner, text="Carte aprs.fi (F4JCF-10)", style="Flat.TButton",
-            command=lambda: self._open_url("https://aprs.fi/#!call=a%2FF4JCF-10&timerange=3600&tail=3600"),
-        ).pack(side="right", padx=(0, 8))
+        self.aprs_count_label = tk.Label(left, text="Stations entendues : —", bg=theme.BG, fg=theme.TEXT,
+                                         font=theme.FONT_SECTION)
+        self.aprs_count_label.pack(anchor="w", padx=12, pady=(2, 4))
+        tbl = theme.card(left)
+        tbl.pack(fill="x", padx=12, pady=(0, 6))
+        cols = ("src", "call", "heard", "dist", "sig", "count", "sym", "comment")
+        self.aprs_tree = ttk.Treeview(tbl.inner, columns=cols, show="headings", height=10)
+        spec = {"src": ("Source", 60, "center"), "call": ("Indicatif", 100, "w"), "heard": ("Dernière réc.", 92, "center"),
+                "dist": ("Distance / relèvement", 140, "e"), "sig": ("RSSI / SNR", 98, "center"),
+                "count": ("Nb", 40, "center"), "sym": ("Symb.", 46, "center"), "comment": ("Commentaire", 230, "w")}
+        for c in cols:
+            t, w, a = spec[c]
+            self.aprs_tree.heading(c, text=t, command=lambda col=c: self._aprs_sort_by(col))
+            self.aprs_tree.column(c, width=w, minwidth=36, anchor=a)
+        self.aprs_tree.tag_configure("lora", foreground="#60a5fa")
+        self.aprs_tree.tag_configure("vhf", foreground="#4ade80")
+        self.aprs_tree.tag_configure("iss", foreground="#c084fc")
+        vsb = ttk.Scrollbar(tbl.inner, orient="vertical", command=self.aprs_tree.yview)
+        self.aprs_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.aprs_tree.pack(fill="x", padx=1, pady=1)
+        self.aprs_tree.bind("<<TreeviewSelect>>", self._on_aprs_select)
+        self._aprs_sort = ("heard", True)
 
-        self.aprs_count_label = tk.Label(
-            wrapper, text="Stations entendues : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
-        )
-        self.aprs_count_label.pack(anchor="w", padx=12, pady=(4, 6))
+        tk.Label(left, text="Derniers paquets reçus", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BODY_BOLD).pack(
+            anchor="w", padx=12, pady=(4, 2))
+        pk = theme.card(left)
+        pk.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        self.aprs_packets = tk.Text(pk.inner, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", 8), relief="flat",
+                                    wrap="none", height=8, padx=6, pady=4)
+        self.aprs_packets.tag_configure("lora", foreground="#60a5fa")
+        self.aprs_packets.tag_configure("vhf", foreground="#4ade80")
+        self.aprs_packets.tag_configure("iss", foreground="#c084fc")
+        self.aprs_packets.pack(fill="both", expand=True, padx=1, pady=1)
+        self.aprs_packets.config(state="disabled")
 
-        table_outer = theme.card(wrapper)
-        table_outer.pack(fill="both", padx=12, pady=(0, 8))
-        columns = ("callsign", "heard", "position", "symbol", "comment")
-        self.aprs_tree = ttk.Treeview(table_outer.inner, columns=columns, show="headings", height=6)
-        headings = {
-            "callsign": "Indicatif", "heard": "Dernière réception", "position": "Position",
-            "symbol": "Symbole", "comment": "Commentaire",
-        }
-        widths = {"callsign": 110, "heard": 150, "position": 220, "symbol": 70, "comment": 260}
-        for col in columns:
-            self.aprs_tree.heading(col, text=headings[col])
-            self.aprs_tree.column(col, width=widths[col], anchor="center" if col != "comment" else "w")
-        self.aprs_tree.pack(fill="both", expand=True, padx=1, pady=1)
-
-        map_outer = theme.card(wrapper)
-        map_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        right = tk.Frame(outer, bg=theme.BG)
+        right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
+        map_outer = theme.card(right)
+        map_outer.pack(fill="both", expand=True)
         self.aprs_map = self._make_map(map_outer.inner)
         self.aprs_map.pack(fill="both", expand=True, padx=1, pady=1)
-        lat, lon = DEFAULT_COORDS
-        self.aprs_map.set_position(lat, lon)
+        self.aprs_map.set_position(*DEFAULT_COORDS)
         self.aprs_map.set_zoom(9)
+        legend = tk.Frame(right, bg=theme.BG)
+        legend.pack(anchor="w", pady=(4, 0))
+        for txt, col in (("● LoRa (iGate)", "#60a5fa"), ("● VHF 144,800", "#4ade80"), ("● via ISS", "#c084fc")):
+            tk.Label(legend, text=txt, bg=theme.BG, fg=col, font=theme.FONT_SUBTITLE).pack(side="left", padx=(0, 14))
+
+        self._vhf_stations = []
+        self._vhf_packets = []
+        self._vhf_pos = {}
+        self._vhf_counts = {}
+        self._lora_stations = {}
+        self._lora_seen = set()
+        self._lora_packets = []
+        self._lora_ok = None
+        self._aprs_selected = None
+        self._aprs_markers = []
+        self._aprs_poll_running = False
+
+    # -- LoRa (lu directement depuis le PC sur la page web de l'iGate)
+
+    def _fetch_lora(self):
+        host = self.config_data.get("lora_igate_host", "192.168.1.154")
+        try:
+            packets = requests.get(f"http://{host}/received-packets.json", timeout=5).json()
+        except Exception as exc:
+            self.after(0, self._render_lora, None, None, str(exc))
+            return
+        stations = None
+        try:
+            r = requests.get(f"http://{host}/stations.json", timeout=5)
+            if r.ok:
+                stations = r.json()
+        except Exception:
+            stations = None
+        self.after(0, self._render_lora, packets, stations, None)
+
+    @staticmethod
+    def _parse_rx_time(date_s, time_s):
+        for fmt in ("%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                return time.mktime(time.strptime(f"{date_s} {time_s}", fmt))
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    def _render_lora(self, packets, stations, error):
+        if not hasattr(self, "lora_badge"):
+            return
+        if error:
+            self._lora_ok = False
+            self.lora_badge.config(text="  INJOIGNABLE  ", bg=theme.RED)
+            self.lora_info.config(text=(f"Pas de réponse de l'iGate ({self.config_data.get('lora_igate_host', '192.168.1.154')}) "
+                                        "depuis ce PC : TTGO éteint, ou PC et iGate pas sur le même réseau."))
+            self._repaint_aprs()
+            return
+        self._lora_ok = True
+        now = time.time()
+        new = 0
+        for p in packets if isinstance(packets, list) else []:
+            raw = str(p.get("packet") or "")
+            key = (p.get("rxDate"), p.get("rxTime"), raw)
+            if key in self._lora_seen:
+                continue
+            self._lora_seen.add(key)
+            new += 1
+            t = self._parse_rx_time(p.get("rxDate"), p.get("rxTime")) or now
+            if t > now + 120 or t < now - 7 * 86400:
+                t = now
+            tnc = aprs_parse.parse_tnc2(raw)
+            self._lora_packets.append({"time": t, "src": "lora", "raw": re.sub(r"^[.<]+", "", raw),
+                                       "rssi": p.get("RSSI"), "snr": p.get("SNR")})
+            if not tnc:
+                continue
+            st = self._lora_stations.setdefault(tnc["src"], {"callsign": tnc["src"], "source": "lora", "count": 0})
+            st["count"] += 1
+            st["last_heard"] = max(st.get("last_heard", 0), t)
+            st["rssi"], st["snr"] = p.get("RSSI"), p.get("SNR")
+            st["path"] = ",".join(tnc["path"])
+            pos = aprs_parse.parse_position(tnc["dest"], tnc["info"])
+            if pos:
+                st.update(lat=pos["lat"], lon=pos["lon"], symbol=pos["symbol"], comment=pos["comment"][:80])
+            elif not st.get("comment"):
+                st["comment"] = tnc["info"][:80]
+        # stations.json (firmware récent) : positions déjà décodées par l'iGate
+        for s in stations if isinstance(stations, list) else []:
+            call = s.get("callsign")
+            if not call or s.get("lat") in (None, 0):
+                continue
+            st = self._lora_stations.setdefault(call, {"callsign": call, "source": "lora", "count": 0,
+                                                       "last_heard": now})
+            st.update(lat=s.get("lat"), lon=s.get("lon"), symbol=s.get("symbol") or st.get("symbol"))
+            st["count"] = max(st["count"], s.get("count") or 0)
+            st["rssi"], st["snr"] = s.get("RSSI", st.get("rssi")), s.get("SNR", st.get("snr"))
+        self._lora_packets = sorted(self._lora_packets, key=lambda x: x["time"])[-300:]
+        if len(self._lora_seen) > 2000:
+            self._lora_seen = set(list(self._lora_seen)[-1000:])
+        last = max((s.get("last_heard", 0) for s in self._lora_stations.values()), default=0)
+        recent = sum(1 for s in self._lora_stations.values() if now - s.get("last_heard", 0) < 3600)
+        self.lora_badge.config(text="  EN LIGNE  ", bg=theme.GREEN)
+        self.lora_info.config(text=(f"{len(packets or [])} paquet(s) en mémoire dans l'iGate  ·  {recent} station(s) "
+                                    f"la dernière heure" + (f"  ·  dernier paquet à {time.strftime('%H:%M:%S', time.localtime(last))}"
+                                                            if last else "")))
+        self._repaint_aprs()
+
+    def _aprs_poll(self):
+        if getattr(self, "_current_view", None) != "aprs":
+            self._aprs_poll_running = False
+            return
+        threading.Thread(target=self._fetch_lora, daemon=True).start()
+        self.after(10000, self._aprs_poll)
+
+    # -- VHF (Pi)
 
     def _render_aprs_stations(self, data, error):
-        if error:
-            self.aprs_count_label.config(
-                text="Stations entendues : indisponible — aprs-api.service est-il déployé sur le Pi ?",
-            )
-            for item in self.aprs_tree.get_children():
-                self.aprs_tree.delete(item)
-            self.aprs_map.delete_all_marker()
+        if not hasattr(self, "aprs_vhf_info"):
             return
+        if error:
+            mode = getattr(self, "_sdr_mode", None)
+            self._vhf_stations = []
+            self.aprs_vhf_info.config(text=(f"En pause : la clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)}."
+                                            if mode not in (None, "aprs", "iss") else
+                                            "API APRS du Pi injoignable (aprs-api.service)."))
+        else:
+            self._vhf_stations = data or []
+            mode = getattr(self, "_sdr_mode", None)
+            listening = "écoute en cours" if mode in ("aprs", "iss") else (
+                f"en pause (clé sur {SDR_MODE_LABELS.get(mode, mode)})" if mode else "")
+            self.aprs_vhf_info.config(text=f"{len(self._vhf_stations)} station(s) entendue(s)  ·  {listening}"
+                                           + ("  ·  fréquence ISS 145,825 MHz" if mode == "iss" else ""))
+        self._repaint_aprs()
 
-        self.aprs_count_label.config(text=f"Stations entendues : {len(data)}")
-        for item in self.aprs_tree.get_children():
-            self.aprs_tree.delete(item)
-        self.aprs_map.delete_all_marker()
+    def _render_aprs_packets_log(self, data, error):
+        if error or not isinstance(data, list):
+            return
+        out = []
+        for p in data[-150:]:
+            raw = f"{p.get('callsign')}>{p.get('dest')}{',' + ','.join(p['path']) if p.get('path') else ''}:{p.get('raw', '')}"
+            via_iss = "RS0ISS" in raw or "ARISS" in raw
+            out.append({"time": p.get("last_heard") or 0, "src": "iss" if via_iss else "vhf", "raw": raw})
+            # Le Pi ne décode que les positions en clair : on complète ici
+            # (formats compressé et Mic-E, fréquents sur les trackers).
+            pos = aprs_parse.parse_position(p.get("dest") or "", p.get("raw") or "")
+            if pos and p.get("callsign"):
+                self._vhf_pos[p["callsign"]] = pos
+        counts = {}
+        for p in data:
+            counts[p.get("callsign")] = counts.get(p.get("callsign"), 0) + 1
+        self._vhf_counts = counts
+        self._vhf_packets = out
+        self._repaint_aprs_packets()
 
-        for st in data:
-            last_heard = st.get("last_heard")
-            heard_txt = time.strftime("%H:%M:%S", time.localtime(last_heard)) if last_heard else "—"
-            lat, lon = st.get("lat"), st.get("lon")
-            if lat is not None and lon is not None:
-                dist = st.get("distance_km")
-                compass = st.get("bearing_compass", "")
-                position_txt = f"{lat:.4f}, {lon:.4f}"
-                if dist is not None:
-                    position_txt += f"  ({dist} km {compass})"
+    # -- Fusion et affichage
+
+    def _aprs_all(self):
+        rows = []
+        for s in self._vhf_stations:
+            path = s.get("path") or []
+            path_s = ",".join(path) if isinstance(path, list) else str(path)
+            src = "iss" if ("RS0ISS" in path_s or "ARISS" in path_s) else "vhf"
+            pos = self._vhf_pos.get(s.get("callsign")) or {}
+            rows.append({"source": src, "callsign": s.get("callsign"), "last_heard": s.get("last_heard"),
+                         "lat": s.get("lat") if s.get("lat") is not None else pos.get("lat"),
+                         "lon": s.get("lon") if s.get("lon") is not None else pos.get("lon"),
+                         "symbol": s.get("symbol") or pos.get("symbol"),
+                         "comment": s.get("comment") or pos.get("comment", ""),
+                         "count": self._vhf_counts.get(s.get("callsign")), "rssi": None, "snr": None})
+        rows += list(self._lora_stations.values())
+        slat, slon = DEFAULT_COORDS
+        for r in rows:
+            if r.get("lat") is not None and r.get("lon") is not None:
+                r["dist_km"] = _haversine_nm(slat, slon, r["lat"], r["lon"]) * 1.852
+                r["brg"] = _bearing_deg(slat, slon, r["lat"], r["lon"])
             else:
-                position_txt = "—"
-            self.aprs_tree.insert(
-                "", "end",
-                values=(
-                    st.get("callsign", "—"), heard_txt, position_txt,
-                    st.get("symbol", "—"), st.get("comment", ""),
-                ),
-            )
-            if lat is not None and lon is not None:
-                self.aprs_map.set_marker(lat, lon, text=st.get("callsign", ""))
+                r["dist_km"] = r["brg"] = None
+        return rows
+
+    def _aprs_sort_by(self, col):
+        cur, desc = self._aprs_sort
+        self._aprs_sort = (col, not desc if cur == col else col in ("heard", "count", "dist"))
+        self._repaint_aprs()
+
+    def _repaint_aprs(self):
+        rows = self._aprs_all()
+        col, desc = self._aprs_sort
+        keyf = {"src": lambda r: r["source"], "call": lambda r: r["callsign"] or "",
+                "heard": lambda r: r.get("last_heard") or 0, "dist": lambda r: r["dist_km"] if r["dist_km"] is not None else -1,
+                "sig": lambda r: r.get("rssi") if r.get("rssi") is not None else -999, "count": lambda r: r.get("count") or 0,
+                "sym": lambda r: r.get("symbol") or "", "comment": lambda r: r.get("comment") or ""}[col]
+        rows.sort(key=keyf, reverse=desc)
+        lora = sum(1 for r in rows if r["source"] == "lora")
+        self.aprs_count_label.config(text=f"Stations entendues : {len(rows)}  (LoRa {lora} · VHF {len(rows) - lora})")
+        if "aprs" in self.tile_chips:
+            self.tile_chips["aprs"].config(text=f"{len(rows)} station(s) · LoRa {lora}")
+        tree = self.aprs_tree
+        tree.delete(*tree.get_children())
+        names = {"lora": "LoRa", "vhf": "VHF", "iss": "ISS"}
+        for i, r in enumerate(rows):
+            lh = r.get("last_heard")
+            dist = (f"{r['dist_km']:.1f} km · {r['brg']:.0f}° {self._compass(r['brg'])}" if r["dist_km"] is not None else "—")
+            sig = (f"{r['rssi']} dBm / {r['snr']} dB" if r.get("rssi") is not None else "")
+            iid = f"{r['source']}:{r['callsign']}"
+            if tree.exists(iid):
+                continue
+            tree.insert("", "end", iid=iid, tags=(r["source"],), values=(
+                names[r["source"]], r["callsign"], time.strftime("%H:%M:%S", time.localtime(lh)) if lh else "—",
+                dist, sig, r.get("count") or "", r.get("symbol") or "", r.get("comment") or ""))
+        if self._aprs_selected and tree.exists(self._aprs_selected):
+            tree.selection_set(self._aprs_selected)
+        # carte
+        for m in self._aprs_markers:
+            try:
+                m.delete()
+            except Exception:
+                pass
+        self._aprs_markers = [self.aprs_map.set_marker(*DEFAULT_COORDS, text="F4JCF", text_color="#16a34a",
+                                                       marker_color_circle="#14532d", marker_color_outside="#22c55e")]
+        colors = {"lora": ("#1e3a8a", "#60a5fa", "#1d4ed8"), "vhf": ("#14532d", "#4ade80", "#15803d"),
+                  "iss": ("#581c87", "#c084fc", "#7e22ce")}
+        for r in rows:
+            if r["dist_km"] is None:
+                continue
+            c_in, c_out, c_txt = colors[r["source"]]
+            self._aprs_markers.append(self.aprs_map.set_marker(
+                r["lat"], r["lon"], text=r["callsign"], text_color=c_txt,
+                marker_color_circle=c_in, marker_color_outside=c_out))
+        self._repaint_aprs_packets()
+
+    def _repaint_aprs_packets(self):
+        if not hasattr(self, "aprs_packets"):
+            return
+        items = sorted(self._vhf_packets + self._lora_packets, key=lambda p: p["time"])[-120:]
+        txt = self.aprs_packets
+        txt.config(state="normal")
+        txt.delete("1.0", "end")
+        names = {"lora": "LoRa", "vhf": "VHF ", "iss": "ISS "}
+        for p in reversed(items):
+            extra = f"  [{p['rssi']} dBm]" if p.get("rssi") is not None else ""
+            txt.insert("end", f"{time.strftime('%H:%M:%S', time.localtime(p['time']))} {names[p['src']]}  ", p["src"])
+            txt.insert("end", f"{p['raw']}{extra}\n")
+        txt.config(state="disabled")
+
+    def _on_aprs_select(self, _e=None):
+        sel = self.aprs_tree.selection()
+        if not sel:
+            return
+        self._aprs_selected = sel[0]
+        for r in self._aprs_all():
+            if f"{r['source']}:{r['callsign']}" == sel[0] and r["dist_km"] is not None:
+                self.aprs_map.set_position(r["lat"], r["lon"])
+                break
 
     # ---------------------------------------------------------------- AIS --
 
@@ -3614,8 +3890,20 @@ class App(tk.Tk):
             tk.Checkbutton(ev, text=t, variable=v, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
                            activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_BODY,
                            highlightthickness=0).grid(row=i // 5, column=i % 5, sticky="w", padx=(0, 14))
+        rep_row = tk.Frame(f, bg=theme.BG_CARD)
+        rep_row.grid(row=8, column=0, columnspan=8, sticky="w", pady=(10, 0))
+        self.nt_report_on = tk.BooleanVar(value=False)
+        tk.Checkbutton(rep_row, text="Rapport quotidien (résumé de la journée) à", variable=self.nt_report_on,
+                       bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+                       activeforeground=theme.TEXT, font=theme.FONT_BODY, highlightthickness=0).pack(side="left")
+        self.nt_report_hour = tk.StringVar(value="20")
+        ttk.Spinbox(rep_row, from_=0, to=23, width=4, textvariable=self.nt_report_hour).pack(side="left", padx=4)
+        tk.Label(rep_row, text="h", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left")
+        ttk.Button(rep_row, text="Aperçu", style="Flat.TButton", command=self._report_preview).pack(side="left", padx=(16, 0))
+        ttk.Button(rep_row, text="Envoyer le rapport maintenant", style="Flat.TButton",
+                   command=self._report_send).pack(side="left", padx=(6, 0))
         btns = tk.Frame(f, bg=theme.BG_CARD)
-        btns.grid(row=8, column=0, columnspan=8, sticky="w", pady=(10, 0))
+        btns.grid(row=9, column=0, columnspan=8, sticky="w", pady=(10, 0))
         ttk.Button(btns, text="Enregistrer", style="Accent.TButton", command=self._notify_save).pack(side="left")
         ttk.Button(btns, text="Envoyer un test", style="Flat.TButton", command=self._notify_test).pack(side="left", padx=8)
         self.nt_status = tk.Label(btns, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
@@ -3653,6 +3941,9 @@ class App(tk.Tk):
                                    else "(non renseigné)")
             for k, v in self.nt_events.items():
                 v.set(bool(cfg.get("events", {}).get(k, True)))
+            dr = cfg.get("daily_report") or {}
+            self.nt_report_on.set(bool(dr.get("enabled")))
+            self.nt_report_hour.set(str(dr.get("hour", 20)))
             self._notify_loaded = True
             self.nt_status.config(text="Réglages chargés depuis le Pi.", fg=theme.MUTED)
 
@@ -3671,6 +3962,11 @@ class App(tk.Tk):
                       "password": self.nt_vars["password"].get(), "to": self.nt_vars["to"].get().strip()},
             "events": {k: v.get() for k, v in self.nt_events.items()},
         }
+        try:
+            payload["daily_report"] = {"enabled": bool(self.nt_report_on.get()),
+                                       "hour": max(0, min(23, int(self.nt_report_hour.get())))}
+        except ValueError:
+            payload["daily_report"] = {"enabled": bool(self.nt_report_on.get()), "hour": 20}
         host, port = self._monitor_endpoint()
         self.nt_status.config(text="Enregistrement…", fg=theme.MUTED)
 
@@ -3692,6 +3988,39 @@ class App(tk.Tk):
                 then()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _report_preview(self):
+        host, port = self._monitor_endpoint()
+
+        def worker():
+            try:
+                r = requests.get(f"http://{host}:{port}/api/monitor/report", timeout=15)
+                r.raise_for_status()
+                d = r.json()
+                self.after(0, lambda: messagebox.showinfo(d.get("title", "Rapport"), d.get("body", "")))
+            except Exception as exc:
+                self.after(0, lambda: self.nt_status.config(text=f"Aperçu impossible : {exc}", fg=theme.RED))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _report_send(self):
+        host, port = self._monitor_endpoint()
+
+        def send():
+            def worker():
+                try:
+                    r = requests.post(f"http://{host}:{port}/api/monitor/report", timeout=40)
+                    r.raise_for_status()
+                    ch = r.json().get("channels") or {}
+                    txt = ("Rapport envoyé : " + ", ".join(f"{k} {v}" for k, v in ch.items())) if ch else \
+                        "Aucun canal configuré (téléphone ou e-mail)."
+                    col = theme.GREEN if ch and all(v == "ok" for v in ch.values()) else theme.ORANGE
+                except Exception as exc:
+                    txt, col = f"Échec : {exc}", theme.RED
+                self.after(0, lambda: self.nt_status.config(text=txt, fg=col))
+            threading.Thread(target=worker, daemon=True).start()
+
+        self._notify_save(then=send)
 
     def _notify_test(self):
         host, port = self._monitor_endpoint()
@@ -4069,6 +4398,539 @@ class App(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # ---------------------------------------------------------- Capteurs 433 --
+
+    S433_FIELDS = {
+        "temperature_C": ("Température", "{:.1f} °C"), "temperature_F": ("Température", "{:.1f} °F"),
+        "humidity": ("Humidité", "{:.0f} %"), "pressure_hPa": ("Pression", "{:.1f} hPa"),
+        "wind_avg_km_h": ("Vent moyen", "{:.1f} km/h"), "wind_max_km_h": ("Rafales", "{:.1f} km/h"),
+        "wind_avg_m_s": ("Vent moyen", "{:.1f} m/s"), "wind_max_m_s": ("Rafales", "{:.1f} m/s"),
+        "wind_dir_deg": ("Direction du vent", "{:.0f}°"), "rain_mm": ("Pluie (cumul)", "{:.1f} mm"),
+        "rain_rate_mm_h": ("Intensité de pluie", "{:.1f} mm/h"), "uv": ("Indice UV", "{}"),
+        "light_lux": ("Luminosité", "{:.0f} lux"), "moisture": ("Humidité du sol", "{} %"),
+        "power_W": ("Puissance", "{:.0f} W"), "energy_kWh": ("Énergie", "{:.2f} kWh"),
+        "depth_cm": ("Profondeur", "{} cm"), "button": ("Bouton", "{}"), "state": ("État", "{}"),
+        "event": ("Événement", "{}"), "cmd": ("Commande", "{}"), "code": ("Code", "{}"),
+    }
+
+    def _build_s433_tab(self, frame):
+        outer = tk.Frame(frame, bg=theme.BG)
+        outer.pack(fill="both", expand=True, padx=4, pady=4)
+        head = theme.card(outer)
+        head.pack(fill="x", padx=12, pady=(8, 6))
+        h = head.inner
+        h.configure(padding=12)
+        tk.Label(h, text="Capteurs 433 MHz (rtl_433)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+        self.s433_pill = theme.pill(h, "INCONNU", theme.MUTED)
+        self.s433_pill.pack(side="left", padx=(12, 0))
+        self.s433_info = tk.Label(h, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.s433_info.pack(side="left", padx=(14, 0))
+        ttk.Button(h, text="Effacer", style="Flat.TButton", command=self._s433_clear).pack(side="right")
+        ttk.Button(h, text="Écouter le 433 MHz", style="Accent.TButton",
+                   command=lambda: self._switch_sdr("433")).pack(side="right", padx=(0, 8))
+
+        body = tk.Frame(outer, bg=theme.BG)
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        tbl = theme.card(body)
+        tbl.pack(side="left", fill="both", expand=True)
+        cols = ("name", "model", "id", "last", "count", "batt", "rssi", "summary")
+        self.s433_tree = ttk.Treeview(tbl.inner, columns=cols, show="headings")
+        spec = {"name": ("Nom", 140, "w"), "model": ("Modèle", 170, "w"), "id": ("ID / canal", 90, "center"),
+                "last": ("Dernière réc.", 100, "center"), "count": ("Nb", 50, "center"),
+                "batt": ("Pile", 60, "center"), "rssi": ("Signal", 80, "center"), "summary": ("Mesures", 420, "w")}
+        for c in cols:
+            t, w, a = spec[c]
+            self.s433_tree.heading(c, text=t)
+            self.s433_tree.column(c, width=w, minwidth=40, anchor=a)
+        self.s433_tree.tag_configure("old", foreground=theme.MUTED)
+        vsb = ttk.Scrollbar(tbl.inner, orient="vertical", command=self.s433_tree.yview)
+        self.s433_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.s433_tree.pack(fill="both", expand=True, padx=1, pady=1)
+        self.s433_tree.bind("<<TreeviewSelect>>", self._s433_select)
+        self.s433_tree.bind("<Double-1>", self._s433_rename)
+
+        det = theme.card(body)
+        det.pack(side="left", fill="y", padx=(10, 0))
+        d = det.inner
+        d.configure(padding=12)
+        d.configure(width=380)
+        self.s433_title = tk.Label(d, text="Sélectionnez un capteur.", bg=theme.BG_CARD, fg=theme.TEXT,
+                                   font=("Segoe UI", 13, "bold"), anchor="w", justify="left", wraplength=360)
+        self.s433_title.pack(anchor="w")
+        tk.Label(d, text="Double-clic sur une ligne pour donner un nom au capteur.", bg=theme.BG_CARD, fg=theme.MUTED,
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 8))
+        self.s433_vals = tk.Frame(d, bg=theme.BG_CARD)
+        self.s433_vals.pack(anchor="w", fill="x")
+        self._s433_devices = []
+        self._s433_sel = None
+        self._s433_poll_running = False
+
+    def _s433_name(self, dev):
+        return (self.config_data.get("sensor_names") or {}).get(dev.get("key"), "")
+
+    def _s433_summary(self, vals):
+        parts = []
+        for k, v in vals.items():
+            label, fmt = self.S433_FIELDS.get(k, (None, None))
+            if not label:
+                continue
+            try:
+                parts.append(f"{label} {fmt.format(v)}")
+            except (ValueError, TypeError):
+                parts.append(f"{label} {v}")
+        return "  ·  ".join(parts[:5])
+
+    def _fetch_s433(self):
+        host = self.config_data.get("pi_host", "192.168.1.229")
+        port = self.config_data.get("port_433", 5010)
+        try:
+            data = {"status": api_client.get_433(host, port, "status"), "devices": api_client.get_433(host, port, "devices")}
+        except Exception as exc:
+            self.after(0, self._render_s433, None, str(exc))
+            return
+        self.after(0, self._render_s433, data, None)
+
+    def _s433_poll(self):
+        if getattr(self, "_current_view", None) != "s433":
+            self._s433_poll_running = False
+            return
+        threading.Thread(target=self._fetch_s433, daemon=True).start()
+        self.after(5000, self._s433_poll)
+
+    def _render_s433(self, data, error):
+        if not hasattr(self, "s433_tree"):
+            return
+        mode = getattr(self, "_sdr_mode", None)
+        if error:
+            if mode not in (None, "433"):
+                self.s433_pill.config(text="  EN PAUSE  ", bg=theme.MUTED)
+                self.s433_info.config(text=f"La clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)}.")
+            else:
+                self.s433_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
+                self.s433_info.config(text="Service rtl433 (port 5010) injoignable : lancer install_extras.sh sur le Pi.")
+            return
+        st = data["status"]
+        self.s433_pill.config(text="  ÉCOUTE  " if st.get("running") else "  ARRÊTÉ  ",
+                              bg=theme.GREEN if st.get("running") else theme.RED)
+        self.s433_info.config(text=(f"{st.get('freq')}  ·  {st.get('devices', 0)} capteur(s), dont "
+                                    f"{st.get('active_last_hour', 0)} actif(s) la dernière heure  ·  "
+                                    f"{st.get('messages', 0)} message(s) depuis le démarrage"
+                                    + (f"  ·  ⚠ {st['error']}" if st.get("error") else "")))
+        self._s433_devices = data["devices"] or []
+        tree = self.s433_tree
+        tree.delete(*tree.get_children())
+        now = time.time()
+        for dev in self._s433_devices:
+            ls = dev.get("last_seen") or 0
+            batt = {1: "OK", 0: "FAIBLE"}.get(dev.get("battery_ok"), "")
+            rssi = f"{dev['rssi']:.0f} dB" if isinstance(dev.get("rssi"), (int, float)) else ""
+            idc = f"{dev.get('id', '')}" + (f" / {dev['channel']}" if dev.get("channel") not in (None, "") else "")
+            tree.insert("", "end", iid=dev["key"], tags=("old",) if now - ls > 3600 else (), values=(
+                self._s433_name(dev), dev.get("model") or "", idc,
+                time.strftime("%H:%M:%S", time.localtime(ls)) if ls else "", dev.get("count", 0), batt, rssi,
+                self._s433_summary(dev.get("values") or {})))
+        if self._s433_sel and tree.exists(self._s433_sel):
+            tree.selection_set(self._s433_sel)
+        if "s433" in self.tile_chips:
+            act = sum(1 for d in self._s433_devices if now - (d.get("last_seen") or 0) < 3600)
+            self.tile_chips["s433"].config(text=f"{len(self._s433_devices)} capteur(s) · {act} actif(s)")
+
+    def _s433_select(self, _e=None):
+        sel = self.s433_tree.selection()
+        if not sel:
+            return
+        self._s433_sel = sel[0]
+        dev = next((d for d in self._s433_devices if d["key"] == sel[0]), None)
+        if not dev:
+            return
+        name = self._s433_name(dev)
+        self.s433_title.config(text=(f"{name}\n" if name else "") + f"{dev.get('model')} (ID {dev.get('id')})")
+        for w in self.s433_vals.winfo_children():
+            w.destroy()
+        rows = []
+        for k, v in (dev.get("values") or {}).items():
+            label, fmt = self.S433_FIELDS.get(k, (k, "{}"))
+            try:
+                rows.append((label, fmt.format(v)))
+            except (ValueError, TypeError):
+                rows.append((label, str(v)))
+        rows += [("Reçu", f"{dev.get('count', 0)} fois"),
+                 ("Première réception", time.strftime("%d/%m %H:%M", time.localtime(dev.get("first_seen", 0)))),
+                 ("Dernière réception", time.strftime("%d/%m %H:%M:%S", time.localtime(dev.get("last_seen", 0))))]
+        if isinstance(dev.get("snr"), (int, float)):
+            rows.append(("RSSI / SNR", f"{dev.get('rssi', 0):.1f} / {dev['snr']:.1f} dB"))
+        for i, (a, b) in enumerate(rows):
+            tk.Label(self.s433_vals, text=a, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).grid(
+                row=i, column=0, sticky="w", pady=1)
+            tk.Label(self.s433_vals, text=b, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD).grid(
+                row=i, column=1, sticky="e", padx=(16, 0), pady=1)
+
+    def _s433_rename(self, _e=None):
+        sel = self.s433_tree.selection()
+        if not sel:
+            return
+        dev = next((d for d in self._s433_devices if d["key"] == sel[0]), None)
+        if not dev:
+            return
+        name = simpledialog.askstring("Nom du capteur", f"Nom pour « {dev.get('model')} (ID {dev.get('id')}) » :",
+                                      initialvalue=self._s433_name(dev), parent=self)
+        if name is None:
+            return
+        names = dict(self.config_data.get("sensor_names") or {})
+        if name.strip():
+            names[dev["key"]] = name.strip()
+        else:
+            names.pop(dev["key"], None)
+        self.config_data["sensor_names"] = names
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+        threading.Thread(target=self._fetch_s433, daemon=True).start()
+
+    def _s433_clear(self):
+        if not messagebox.askyesno("Capteurs 433", "Effacer la liste des capteurs reçus ?"):
+            return
+        host = self.config_data.get("pi_host", "192.168.1.229")
+
+        def w():
+            try:
+                requests.post(f"http://{host}:{self.config_data.get('port_433', 5010)}/api/433/clear", timeout=6)
+            except Exception:
+                pass
+            self._fetch_s433()
+
+        threading.Thread(target=w, daemon=True).start()
+
+    # --------------------------------------------------------- Satellites --
+
+    def _build_sat_tab(self, frame):
+        outer = tk.Frame(frame, bg=theme.BG)
+        outer.pack(fill="both", expand=True, padx=4, pady=4)
+        left = tk.Frame(outer, bg=theme.BG, width=820)
+        left.pack(side="left", fill="y", pady=(0, 6))
+        left.pack_propagate(False)
+
+        top = theme.card(left)
+        top.pack(fill="x", padx=12, pady=(8, 6))
+        t = top.inner
+        t.configure(padding=12)
+        tk.Label(t, text="PROCHAIN PASSAGE DE L'ISS", bg=theme.BG_CARD, fg=theme.MUTED,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.sat_iss_big = tk.Label(t, text="—", bg=theme.BG_CARD, fg=theme.ACCENT, font=("Segoe UI", 18, "bold"))
+        self.sat_iss_big.pack(anchor="w")
+        self.sat_iss_sub = tk.Label(t, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                    justify="left", anchor="w")
+        self.sat_iss_sub.pack(anchor="w")
+        opt = tk.Frame(t, bg=theme.BG_CARD)
+        opt.pack(anchor="w", pady=(8, 0))
+        self.sat_auto_var = tk.BooleanVar(value=self.config_data.get("iss_auto", False))
+        tk.Checkbutton(opt, text="Pendant les passages de l'ISS, donner automatiquement la clé SDR à « APRS ISS » "
+                                 "(145,825 MHz) puis la rendre au module précédent", variable=self.sat_auto_var,
+                       command=self._sat_toggle_auto, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
+                       activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_SUBTITLE,
+                       highlightthickness=0, wraplength=760, justify="left").pack(anchor="w")
+        ttk.Button(opt, text="Écouter l'APRS de l'ISS maintenant", style="Flat.TButton",
+                   command=lambda: self._switch_sdr("iss")).pack(anchor="w", pady=(4, 0))
+
+        bar = tk.Frame(left, bg=theme.BG)
+        bar.pack(fill="x", padx=12, pady=(2, 4))
+        tk.Label(bar, text="Passages (24 h)", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+        self.sat_all_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(bar, text="tous les satellites amateurs", variable=self.sat_all_var,
+                       command=self._sat_recompute, bg=theme.BG, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
+                       activebackground=theme.BG, activeforeground=theme.TEXT, font=theme.FONT_SUBTITLE,
+                       highlightthickness=0).pack(side="left", padx=(12, 0))
+        tk.Label(bar, text="élévation min.", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left", padx=(12, 4))
+        self.sat_minel_var = tk.StringVar(value="10")
+        sb = ttk.Spinbox(bar, from_=0, to=60, width=4, textvariable=self.sat_minel_var, command=self._sat_recompute)
+        sb.pack(side="left")
+        sb.bind("<Return>", lambda _e: self._sat_recompute())
+        self.sat_tle_label = tk.Label(bar, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8))
+        self.sat_tle_label.pack(side="right")
+
+        tbl = theme.card(left)
+        tbl.pack(fill="x", padx=12, pady=(0, 6))
+        cols = ("sat", "aos", "maxel", "dur", "az", "info")
+        self.sat_tree = ttk.Treeview(tbl.inner, columns=cols, show="headings", height=9)
+        spec = {"sat": ("Satellite", 150, "w"), "aos": ("Lever", 110, "center"), "maxel": ("Élév. max", 76, "center"),
+                "dur": ("Durée", 60, "center"), "az": ("Azimut lever → coucher", 150, "center"),
+                "info": ("Dans", 90, "center")}
+        for c in cols:
+            tt, w, a = spec[c]
+            self.sat_tree.heading(c, text=tt)
+            self.sat_tree.column(c, width=w, minwidth=40, anchor=a)
+        self.sat_tree.tag_configure("now", background="#14532d", foreground="#ffffff")
+        self.sat_tree.tag_configure("good", foreground="#4ade80")
+        vsb = ttk.Scrollbar(tbl.inner, orient="vertical", command=self.sat_tree.yview)
+        self.sat_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.sat_tree.pack(fill="x", padx=1, pady=1)
+        self.sat_tree.bind("<<TreeviewSelect>>", self._sat_select)
+
+        det = theme.card(left)
+        det.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        d = det.inner
+        d.configure(padding=8)
+        self.sat_polar = tk.Canvas(d, width=250, height=250, bg=theme.BG_CARD, highlightthickness=0)
+        self.sat_polar.pack(side="left")
+        info = tk.Frame(d, bg=theme.BG_CARD)
+        info.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        self.sat_det_title = tk.Label(info, text="Sélectionnez un passage.", bg=theme.BG_CARD, fg=theme.TEXT,
+                                      font=("Segoe UI", 13, "bold"), anchor="w")
+        self.sat_det_title.pack(anchor="w")
+        self.sat_det_freq = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.ACCENT, font=theme.FONT_SUBTITLE,
+                                     anchor="w", justify="left", wraplength=500)
+        self.sat_det_freq.pack(anchor="w", pady=(2, 6))
+        self.sat_det_text = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.TEXT, font=("Consolas", 9),
+                                     anchor="nw", justify="left")
+        self.sat_det_text.pack(anchor="w", fill="both", expand=True)
+
+        right = tk.Frame(outer, bg=theme.BG)
+        right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
+        mo = theme.card(right)
+        mo.pack(fill="both", expand=True)
+        self.sat_map = self._make_map(mo.inner)
+        self.sat_map.pack(fill="both", expand=True, padx=1, pady=1)
+        self.sat_map.set_position(*DEFAULT_COORDS)
+        self.sat_map.set_zoom(3)
+        tk.Label(right, text="Position actuelle des satellites suivis · trace des 90 prochaines minutes et zone de "
+                             "visibilité du satellite sélectionné", bg=theme.BG, fg=theme.MUTED,
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
+
+        self._sats = []
+        self._sat_passes = []
+        self._sat_selected = None
+        self._sat_markers = []
+        self._sat_obs = sat_predict.Observer(*DEFAULT_COORDS, 100)
+        self._iss_auto_prev = None
+        threading.Thread(target=self._sat_load, daemon=True).start()
+        self.after(15000, self._sat_tick)
+
+    def _sat_load(self, force=False):
+        try:
+            tles, when = sat_predict.load_tles(force)
+            sats = [sat_predict.Sat(*x) for x in tles]
+            err = None
+        except Exception as exc:
+            sats, when, err = [], None, str(exc)
+        self.after(0, self._sat_loaded, sats, when, err)
+
+    def _sat_loaded(self, sats, when, err):
+        if err:
+            self.sat_tle_label.config(text=f"⚠ {err}", fg=theme.ORANGE)
+            return
+        self._sats = sats
+        self.sat_tle_label.config(text=f"{len(sats)} satellites · éléments CelesTrak du "
+                                       f"{time.strftime('%d/%m %H:%M', time.localtime(when))}", fg=theme.MUTED)
+        self._sat_recompute()
+
+    def _sat_recompute(self):
+        try:
+            min_el = float(self.sat_minel_var.get())
+        except ValueError:
+            min_el = 10
+        sats = self._sats if self.sat_all_var.get() else [s for s in self._sats if s.label]
+        obs = self._sat_obs
+
+        def worker():
+            now = time.time()
+            res = []
+            for s in sats:
+                try:
+                    for p in s.passes(obs, now - 900, hours=24, min_el=min_el):
+                        if p["los"] > now:
+                            p["sat"] = s
+                            res.append(p)
+                except Exception:
+                    continue
+            res.sort(key=lambda p: p["aos"])
+            self.after(0, self._sat_show, res)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _sat_show(self, passes):
+        self._sat_passes = passes
+        self._sat_refresh_table()
+        self._sat_tick(reschedule=False)
+
+    def _sat_refresh_table(self):
+        tree = self.sat_tree
+        sel = self._sat_selected
+        tree.delete(*tree.get_children())
+        now = time.time()
+        for i, p in enumerate(self._sat_passes[:80]):
+            s = p["sat"]
+            on = p["aos"] <= now <= p["los"]
+            dt = p["aos"] - now
+            when = "EN COURS" if on else (f"{int(dt // 3600)} h {int(dt % 3600 // 60):02d}" if dt >= 3600 else f"{int(dt // 60)} min")
+            tree.insert("", "end", iid=str(i), tags=("now",) if on else (("good",) if p["max_el"] >= 40 else ()), values=(
+                s.label or s.name, time.strftime("%d/%m %H:%M:%S", time.localtime(p["aos"])), f"{p['max_el']:.0f}°",
+                f"{int((p['los'] - p['aos']) // 60)} min", f"{p['aos_az']:.0f}° {self._compass(p['aos_az'])} → "
+                f"{p['los_az']:.0f}° {self._compass(p['los_az'])}", when))
+        if sel is not None and tree.exists(sel):
+            tree.selection_set(sel)
+
+    def _sat_select(self, _e=None):
+        sel = self.sat_tree.selection()
+        if not sel:
+            return
+        self._sat_selected = sel[0]
+        idx = int(sel[0])
+        if idx >= len(self._sat_passes):
+            return
+        p = self._sat_passes[idx]
+        s = p["sat"]
+        self.sat_det_title.config(text=s.label or s.name)
+        self.sat_det_freq.config(text=s.freqs or "")
+        obs = self._sat_obs
+        lines = [f"{'Heure':8} {'Azim.':>6} {'Élév.':>6} {'Dist.':>7}  Doppler 145,825 / 437,800"]
+        t = p["aos"]
+        while t <= p["los"] + 1:
+            az, el, rng, rr = s.look(obs, t)
+            d2 = -rr / 299792.458 * 145.825e6
+            d7 = -rr / 299792.458 * 437.8e6
+            lines.append(f"{time.strftime('%H:%M:%S', time.localtime(t))} {az:5.0f}° {el:5.0f}° {rng:6.0f} km  "
+                         f"{d2 / 1000:+5.1f} / {d7 / 1000:+5.1f} kHz")
+            t += 60
+        self.sat_det_text.config(text="\n".join(lines[:16]))
+        self._sat_draw_polar(p)
+        self._sat_draw_map()
+
+    def _sat_draw_polar(self, p):
+        c = self.sat_polar
+        c.delete("all")
+        cx, cy, r = 125, 125, 105
+        for el in (0, 30, 60):
+            rr = r * (90 - el) / 90
+            c.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=theme.BORDER)
+            c.create_text(cx + 3, cy - rr + 7, text=f"{el}°", anchor="w", fill=theme.MUTED, font=("Segoe UI", 7))
+        for a, lab in ((0, "N"), (90, "E"), (180, "S"), (270, "O")):
+            ra = math.radians(a)
+            c.create_line(cx, cy, cx + r * math.sin(ra), cy - r * math.cos(ra), fill=theme.BORDER)
+            c.create_text(cx + (r + 10) * math.sin(ra), cy - (r + 10) * math.cos(ra), text=lab, fill=theme.MUTED,
+                          font=("Segoe UI", 8, "bold"))
+        s, obs = p["sat"], self._sat_obs
+        pts = []
+        t = p["aos"]
+        while t <= p["los"]:
+            az, el, _r, _v = s.look(obs, t)
+            rr = r * (90 - max(0, el)) / 90
+            pts += [cx + rr * math.sin(math.radians(az)), cy - rr * math.cos(math.radians(az))]
+            t += 15
+        if len(pts) >= 4:
+            c.create_line(*pts, fill=theme.ACCENT, width=2, smooth=True)
+            c.create_oval(pts[0] - 4, pts[1] - 4, pts[0] + 4, pts[1] + 4, fill="#4ade80", outline="")
+            c.create_oval(pts[-2] - 4, pts[-1] - 4, pts[-2] + 4, pts[-1] + 4, fill="#f87171", outline="")
+        now = time.time()
+        if p["aos"] <= now <= p["los"]:
+            az, el, _r, _v = s.look(obs, now)
+            rr = r * (90 - max(0, el)) / 90
+            x, y = cx + rr * math.sin(math.radians(az)), cy - rr * math.cos(math.radians(az))
+            c.create_oval(x - 6, y - 6, x + 6, y + 6, outline="#ffffff", width=2)
+
+    def _sat_draw_map(self):
+        for m in self._sat_markers:
+            try:
+                m.delete()
+            except Exception:
+                pass
+        self._sat_markers = []
+        self.sat_map.delete_all_path()
+        self.sat_map.delete_all_polygon()
+        now = time.time()
+        shown = [s for s in self._sats if s.label]
+        sel = None
+        if self._sat_selected is not None and int(self._sat_selected) < len(self._sat_passes):
+            sel = self._sat_passes[int(self._sat_selected)]["sat"]
+        for s in shown:
+            sp = s.subpoint(now)
+            if not sp:
+                continue
+            is_sel = s is sel
+            self._sat_markers.append(self.sat_map.set_marker(
+                sp[0], sp[1], text=s.label.split(" ")[0], text_color="#7e22ce" if not is_sel else "#c2410c",
+                marker_color_circle="#581c87" if not is_sel else "#7c2d12",
+                marker_color_outside="#c084fc" if not is_sel else "#fb923c"))
+        if sel is not None:
+            seg, prev_lon = [], None
+            for k in range(0, 91, 1):
+                sp = sel.subpoint(now + k * 60)
+                if not sp:
+                    continue
+                if prev_lon is not None and abs(sp[1] - prev_lon) > 180:  # passage de l'antiméridien
+                    if len(seg) >= 2:
+                        self.sat_map.set_path(seg, color="#fb923c", width=2)
+                    seg = []
+                seg.append((sp[0], sp[1]))
+                prev_lon = sp[1]
+            if len(seg) >= 2:
+                self.sat_map.set_path(seg, color="#fb923c", width=2)
+            fp = sat_predict.footprint(sel, now)
+            if fp and max(abs(a[1] - b[1]) for a, b in zip(fp, fp[1:])) < 180:
+                self.sat_map.set_polygon(fp, outline_color="#fb923c", fill_color=None, border_width=1)
+        self._sat_markers.append(self.sat_map.set_marker(*DEFAULT_COORDS, text="F4JCF", text_color="#16a34a",
+                                                         marker_color_circle="#14532d", marker_color_outside="#22c55e"))
+
+    def _sat_toggle_auto(self):
+        self.config_data["iss_auto"] = bool(self.sat_auto_var.get())
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+
+    def _sat_tick(self, reschedule=True):
+        """Toutes les 15 s : compte à rebours ISS, carte, bascule auto ISS."""
+        try:
+            now = time.time()
+            iss = [p for p in self._sat_passes if (p["sat"].label or "").startswith("ISS")]
+            nxt = next((p for p in iss if p["los"] > now), None)
+            if nxt:
+                if nxt["aos"] <= now:
+                    az, el, _r, _v = nxt["sat"].look(self._sat_obs, now)
+                    self.sat_iss_big.config(text=f"L'ISS est au-dessus de vous ! Élévation {el:.0f}°, azimut {az:.0f}°",
+                                            fg="#4ade80")
+                    self.sat_iss_sub.config(text=f"Coucher à {time.strftime('%H:%M:%S', time.localtime(nxt['los']))} "
+                                                 f"vers {nxt['los_az']:.0f}° {self._compass(nxt['los_az'])}")
+                else:
+                    dt = nxt["aos"] - now
+                    self.sat_iss_big.config(
+                        text=(f"Dans {int(dt // 3600)} h {int(dt % 3600 // 60):02d} min" if dt >= 3600 else f"Dans {int(dt // 60)} min {int(dt % 60):02d} s"),
+                        fg=theme.ACCENT)
+                    self.sat_iss_sub.config(text=(
+                        f"Lever à {time.strftime('%H:%M:%S', time.localtime(nxt['aos']))} au {nxt['aos_az']:.0f}° "
+                        f"{self._compass(nxt['aos_az'])}  ·  élévation max {nxt['max_el']:.0f}° à "
+                        f"{time.strftime('%H:%M', time.localtime(nxt['max_t']))}  ·  coucher à "
+                        f"{time.strftime('%H:%M:%S', time.localtime(nxt['los']))}"))
+                if "sats" in self.tile_chips:
+                    self.tile_chips["sats"].config(
+                        text="ISS au-dessus !" if nxt["aos"] <= now else
+                        f"ISS à {time.strftime('%H:%M', time.localtime(nxt['aos']))} ({nxt['max_el']:.0f}°)")
+            # Bascule automatique vers l'APRS de l'ISS pendant le passage
+            if self.config_data.get("iss_auto") and nxt is not None:
+                active = nxt["aos"] - 30 <= now <= nxt["los"]
+                mode = getattr(self, "_sdr_mode", None)
+                if active and mode != "iss" and self._iss_auto_prev is None and mode != "off":
+                    self._iss_auto_prev = mode or "aprs"
+                    self._switch_sdr("iss")
+                elif not active and self._iss_auto_prev is not None:
+                    prev, self._iss_auto_prev = self._iss_auto_prev, None
+                    if mode == "iss":
+                        self._switch_sdr(prev)
+            if getattr(self, "_current_view", None) == "sats":
+                self._sat_refresh_table()
+                self._sat_draw_map()
+            if self._sat_passes and self._sat_passes[0]["los"] < now - 60:
+                self._sat_recompute()
+        except Exception as exc:
+            _log_crash(f"Satellites : {exc}", context="sat_tick")
+        if reschedule:
+            if self._sats and time.time() - getattr(self, "_sat_tle_checked", 0) > 6 * 3600:
+                self._sat_tle_checked = time.time()
+                threading.Thread(target=self._sat_load, daemon=True).start()
+            self.after(15000, self._sat_tick)
+
     # ------------------------------------------------- Pages informatives --
 
     def _build_info_tab(self, frame, title: str, status_key: str, body_text: str):
@@ -4234,7 +5096,7 @@ class App(tk.Tk):
         btns.pack(anchor="w")
         tk.Label(btns, text="Donner la clé à :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left", padx=(0, 10))
         self.sdr_mode_buttons = {}
-        for mode in ("adsb", "ais", "aprs", "beacon", "openwebrx"):
+        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "433", "openwebrx"):
             b = tk.Button(
                 btns, text=SDR_MODE_LABELS[mode], font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
                 bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT, activeforeground="#1a1200",
@@ -4274,7 +5136,7 @@ class App(tk.Tk):
                 font=theme.FONT_BODY, highlightthickness=0, command=self._sdr_sched_show,
             ).pack(side="left", padx=(0, 16))
 
-        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "beacon", "openwebrx")]
+        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "433", "openwebrx")]
         self._sdr_label_to_mode = {v: k for k, v in SDR_MODE_LABELS.items()}
 
         editors = tk.Frame(plan, bg=theme.BG_CARD)

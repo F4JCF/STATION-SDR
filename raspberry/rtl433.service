@@ -1,0 +1,15 @@
+[Unit]
+Description=Capteurs 433 MHz (rtl_433, ecoute seule)
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=RTL433_PORT=5010
+Environment=RTL433_FREQ=433.92M
+ExecStart=/usr/bin/python3 /usr/local/bin/rtl433_api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

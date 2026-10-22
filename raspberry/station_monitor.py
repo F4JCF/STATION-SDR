@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
     # Vigilance Météo-France : clé gratuite à créer sur portail-api.meteofrance.fr
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
+    "daily_report": {"enabled": False, "hour": 20},
 }
 EVENT_LABELS = {
     "squawk": "Squawk d'urgence avion (7700 / 7600 / 7500)",
@@ -121,7 +122,7 @@ def public_config(cfg: dict) -> dict:
 
 def update_config(data: dict) -> dict:
     cfg = load_config()
-    for section in ("ntfy", "email", "events", "vigilance"):
+    for section in ("ntfy", "email", "events", "vigilance", "daily_report"):
         if isinstance(data.get(section), dict):
             for k, v in data[section].items():
                 if (section, k) in (("email", "password"), ("vigilance", "api_key")) and not v:
@@ -500,6 +501,94 @@ def vigilance_loop() -> None:
                 break
 
 
+# ------------------------------------------------------ Rapport quotidien --
+
+REPORT_STATE = os.path.join(os.path.dirname(DB_PATH), "report_last")
+MODE_NAMES = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "iss": "APRS ISS", "beacon": "Balise 406",
+              "433": "433 MHz", "openwebrx": "OpenWebRX", "off": "arrêtée"}
+
+
+def build_report(hours: int = 24) -> tuple:
+    since = int(time.time() - hours * 3600)
+    con = db()
+    try:
+        rows = con.execute("SELECT * FROM samples WHERE t >= ? ORDER BY t", (since,)).fetchall()
+    finally:
+        con.close()
+    def col(i):
+        return [r[i] for r in rows if r[i] is not None]
+    lines = []
+    n = len(rows) or 1
+    ac, rng = col(1), col(3)
+    if ac:
+        lines.append(f"✈ ADS-B : jusqu'à {max(ac)} avions en même temps, portée max {max(rng):.0f} km" if rng
+                     else f"✈ ADS-B : jusqu'à {max(ac)} avions en même temps")
+    ships, srng = col(4), col(5)
+    if ships:
+        lines.append(f"⚓ AIS : jusqu'à {max(ships)} navires, portée max {max(srng):.0f} km" if srng
+                     else f"⚓ AIS : jusqu'à {max(ships)} navires")
+    aprs = col(6)
+    if aprs:
+        lines.append(f"📡 APRS VHF : jusqu'à {max(aprs)} stations sur 30 min")
+    frames = fetch_json("http://127.0.0.1:5009/api/beacon/frames?limit=500")
+    if isinstance(frames, list):
+        recent = [f for f in frames if not f.get("manual") and (f.get("time") or 0) >= since]
+        if recent:
+            real = len({f.get("hex_id") for f in recent if not f.get("test")})
+            test = len({f.get("hex_id") for f in recent if f.get("test")})
+            lines.append(f"🆘 Balises 406 : {real} réelle(s), {test} en test")
+        else:
+            lines.append("🆘 Balises 406 : aucune")
+    sensors = fetch_json("http://127.0.0.1:5010/api/433/devices")
+    if isinstance(sensors, list) and sensors:
+        act = sum(1 for d in sensors if (d.get("last_seen") or 0) >= since)
+        lines.append(f"🌡 Capteurs 433 MHz : {act} actif(s)")
+    temps = col(7)
+    uv = sum(1 for r in rows if r[8])
+    if temps:
+        lines.append(f"🖥 Pi : {min(temps):.0f}–{max(temps):.0f} °C"
+                     + (f", sous-tension {uv} min" if uv else ", alimentation correcte"))
+    nod = sum(1 for r in rows if r[10] == 0)
+    if nod:
+        lines.append(f"⚠ Clé SDR absente pendant {nod} min")
+    modes = {}
+    for r in rows:
+        modes[r[9] or "?"] = modes.get(r[9] or "?", 0) + 1
+    if rows:
+        lines.append("🔑 Clé : " + ", ".join(f"{MODE_NAMES.get(m, m)} {c * 100 // n} %"
+                                           for m, c in sorted(modes.items(), key=lambda x: -x[1])))
+    with _lock:
+        alerts = [a for a in _sent if a["time"] >= since and a["title"] != "Test de notification"]
+    lines.append(f"🔔 Alertes envoyées : {len(alerts)}" + (
+        " (" + ", ".join(a["title"] for a in alerts[:3]) + ("…" if len(alerts) > 3 else "") + ")" if alerts else ""))
+    if _vigilance.get("status") == "ok" and _vigilance.get("periods"):
+        worst = max(p.get("max_color", 1) for p in _vigilance["periods"])
+        lines.append(f"☔ Vigilance 06 : {VIGI_COLORS.get(worst, '?')}")
+    title = f"Rapport du {time.strftime('%d/%m/%Y')} — F4JCF-SDR-STATION"
+    return title, "\n".join(lines) if lines else "Pas encore de données."
+
+
+def report_loop() -> None:
+    while True:
+        try:
+            cfg = load_config()
+            dr = cfg.get("daily_report") or {}
+            lt = time.localtime()
+            today = time.strftime("%Y-%m-%d", lt)
+            try:
+                last = open(REPORT_STATE, encoding="utf-8").read().strip()
+            except OSError:
+                last = ""
+            if dr.get("enabled") and lt.tm_hour == int(dr.get("hour", 20)) and last != today:
+                title, body = build_report()
+                notify(title, body, 2)
+                with open(REPORT_STATE, "w", encoding="utf-8") as f:
+                    f.write(today)
+        except Exception:
+            log.exception("Rapport quotidien")
+        time.sleep(60)
+
+
 def collector_loop() -> None:
     state = {}
     while True:
@@ -587,7 +676,7 @@ button:disabled{opacity:.5}
 <div class="card"><div class="lbl">Vigilance Météo-France</div><div id="vigi" class="muted">—</div></div>
 <div class="card"><div class="lbl">Dernières alertes</div><div id="alerts" class="muted">—</div></div>
 <script>
-const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",off:"Arrêtée"};
+const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406","433":"433 MHz",iss:"APRS ISS",off:"Arrêtée"};
 const VC={1:["#3fb950","VERT"],2:["#eab308","JAUNE"],3:["#f97316","ORANGE"],4:["#f85149","ROUGE"]};
 let busy=false;
 function tile(l,v,c,s){return `<div class="tile"><div class="lbl">${l}</div><div class="big ${c||""}">${v}</div>${s?`<div class="muted" style="font-size:12px">${s}</div>`:""}</div>`}
@@ -605,7 +694,7 @@ function render(d){
   document.getElementById("mode").innerHTML=m.mode==="off"?'<span class="red">Arrêtée</span>':`<span style="color:var(--accent)">${L[m.mode]||"—"}</span>`;
   const sched={manual:"manuel",rotation:"rotation",planning:"planning horaire"}[(m.schedule||{}).type]||"—";
   document.getElementById("modeinfo").textContent=m.mode==="off"?"tous les modules sont arrêtés":"partage : "+sched;
-  let b="";for(const k of ["adsb","ais","aprs","beacon","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
+  let b="";for(const k of ["adsb","ais","aprs","iss","beacon","433","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
     b+=`<button class="${k===m.mode?"on":""}" ${(!ok||busy)?"disabled":""} onclick="setMode('${k}')">${L[k]}</button>`}
   b+=`<button class="stop" ${(m.mode==="off"||busy)?"disabled":""} onclick="setMode('off')">■ Arrêter</button>`;
   document.getElementById("btns").innerHTML=b;
@@ -704,6 +793,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, polar(kind if kind in ("adsb", "ais") else "adsb", hours))
         elif path == "/api/monitor/config":
             self._send(200, public_config(load_config()))
+        elif path == "/api/monitor/report":
+            title, body = build_report()
+            self._send(200, {"title": title, "body": body})
         elif path == "/api/vigilance":
             self._send(200, dict(_vigilance))
         elif path == "/api/monitor/notifications":
@@ -723,13 +815,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, public_config(update_config(data if isinstance(data, dict) else {})))
         elif path.startswith("/api/dash/sdr/"):
             mode = path.rsplit("/", 1)[-1]
-            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "off"):
+            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "433", "iss", "off"):
                 self._send(400, {"error": "module inconnu"})
                 return
             try:
                 self._send(200, proxy_sdr_mode(mode))
             except Exception as exc:
                 self._send(502, {"error": str(exc)})
+        elif path == "/api/monitor/report":
+            title, body = build_report()
+            self._send(200, notify(title, body, 2, force=True))
         elif path == "/api/monitor/test":
             res = notify("Test de notification",
                          "Si vous lisez ceci, les alertes de F4JCF-SDR-STATION arrivent bien. 73 !", 3, force=True)
@@ -745,4 +840,5 @@ if __name__ == "__main__":
     db().close()
     threading.Thread(target=collector_loop, daemon=True).start()
     threading.Thread(target=vigilance_loop, daemon=True).start()
+    threading.Thread(target=report_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

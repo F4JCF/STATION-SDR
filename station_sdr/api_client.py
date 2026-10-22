@@ -184,6 +184,13 @@ def beacon_clear(host: str, port: int) -> dict:
     return resp.json()
 
 
+def get_433(host: str, port: int, what: str):
+    """Service rtl433 : status, devices ou events."""
+    resp = requests.get(f"http://{host}:{port}/api/433/{what}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_sdr_mode(host: str, port: int) -> dict:
     """Mode actuel de la clé SDR (sdr_switch.py)."""
     url = f"http://{host}:{port}/api/sdr/mode"
