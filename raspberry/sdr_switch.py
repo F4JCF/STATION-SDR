@@ -48,10 +48,12 @@ CANDIDATES = {
     # Capteurs 433 MHz et APRS via l'ISS (145,825 MHz).
     "433": ["rtl433"],
     "iss": ["direwolf-iss"],
+    # Veille 121,5 MHz : sirène des balises de détresse (radioralliement).
+    "elt121": ["elt121"],
 }
 
 LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-          "433": "Capteurs 433", "iss": "APRS ISS", "off": "Arrêtée"}
+          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "off": "Arrêtée"}
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
@@ -361,6 +363,7 @@ LOG_UNITS = {
     "svxlink": "SvxLink", "aprs-api": "API APRS", "svxlink-api": "API SvxLink", "sdr-switch": "Bascule de clé",
     "station-monitor": "Surveillance / notifications", "pat@f4jcf": "Winlink (Pat)", "docker:openwebrx": "OpenWebRX",
     "beacon406": "Balises 406 MHz", "rtl433": "Capteurs 433 MHz", "direwolf-iss": "APRS ISS (145,825)",
+    "elt121": "Veille 121,5 MHz",
 }
 
 # Fichiers de configuration inclus dans la sauvegarde.
@@ -438,6 +441,8 @@ PI_FILES = [
     ("raspberry/rtl433_api.py", "/usr/local/bin/rtl433_api.py", 0o755),
     ("raspberry/rtl433.service", "/etc/systemd/system/rtl433.service", 0o644),
     ("raspberry/direwolf-iss.service", "/etc/systemd/system/direwolf-iss.service", 0o644),
+    ("raspberry/elt121_api.py", "/usr/local/bin/elt121_api.py", 0o755),
+    ("raspberry/elt121.service", "/etc/systemd/system/elt121.service", 0o644),
 ]
 PI_VERSION_FILE = os.path.join(STATE_DIR, "pi_version")
 _update_state = {"running": False, "log": [], "result": None}
@@ -495,7 +500,7 @@ def _update_pi(ref: str) -> None:
             if _systemctl("is-enabled", f"{unit}.service").stdout.strip() == "enabled":
                 _systemctl("restart", f"{unit}.service")
                 say(f"  {unit} redémarré")
-        for unit in ("beacon406", "rtl433"):
+        for unit in ("beacon406", "rtl433", "elt121"):
             if _systemctl("is-active", f"{unit}.service").stdout.strip() == "active":
                 _systemctl("restart", f"{unit}.service")
                 say(f"  {unit} redémarré")

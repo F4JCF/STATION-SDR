@@ -1,0 +1,14 @@
+[Unit]
+Description=Veille 121,5 MHz - sirene des balises de detresse (ecoute seule)
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=ELT121_PORT=5011
+ExecStart=/usr/bin/python3 /usr/local/bin/elt121_api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
     "port_beacon": 5009,
     "lora_igate_host": "192.168.1.154",
     "port_433": 5010,
+    "port_elt121": 5011,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,

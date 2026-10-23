@@ -229,3 +229,13 @@ et « APRS ISS ». Les passages de satellites sont calculés par l'appli
 (SGP4, éléments CelesTrak) ; elle peut basculer seule sur l'ISS pendant
 ses passages. L'iGate LoRa F4JCF-10 est lu directement depuis le PC
 (`received-packets.json`, `stations.json`).
+
+## Veille 121,5 MHz et goniométrie (SATER)
+
+La même commande `install_extras.sh` installe `elt121_api.py` (port 5011) :
+écoute AM du 121,5 MHz (ou 243 MHz) par rtl_fm, reconnaissance de la
+sirène des balises (tonalité balayée 1600 → 300 Hz, 2 à 4 fois par
+seconde), niveau au-dessus du bruit, enregistrements audio des détections.
+Dans l'appli, la vignette « Balises de détresse » a trois onglets :
+406 MHz, 121,5 MHz et Goniométrie (relèvements des équipes, tracé sur la
+carte, zone probable, compte rendu à copier).

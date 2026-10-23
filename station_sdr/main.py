@@ -40,6 +40,7 @@ from .config import load_config, save_config
 from .version import __version__
 from .aircraft_db import RouteCache, TarDb
 from . import aprs_parse, map_tiles, sat_predict
+from .sater_ui import SaterMixin
 from .icao_ranges import icao_country
 
 APP_TITLE = f"STATION-SDR v{__version__}"
@@ -92,7 +93,7 @@ HOME_TILES = [
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
     ("aprs", "APRS", "iGate LoRa + VHF 144,800"),
     ("ais", "AIS", "Trafic maritime"),
-    ("beacon", "Balises de détresse", "406 MHz · décodage COSPAS-SARSAT"),
+    ("beacon", "Balises de détresse", "406 MHz · 121,5 MHz · goniométrie"),
     ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
@@ -117,7 +118,7 @@ MODULE_SDR_MODE = {
     "s433": "433",
 }
 SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-                   "433": "Capteurs 433", "iss": "APRS ISS", "off": "arrêtée"}
+                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -630,6 +631,8 @@ class _TileChip:
     def refresh(self):
         mode = MODULE_SDR_MODE.get(self.key)
         current = getattr(self.app, "_sdr_mode", None)
+        if self.key == "beacon" and current == "elt121":
+            mode = "elt121"  # la vignette Balises couvre aussi le 121,5 MHz
         if self.key == "aprs" and mode and current and mode != current:
             # le LoRa (iGate) fonctionne sans la clé SDR : seule la VHF est en pause
             self.label.config(text=f" {self.text} · VHF en pause ", fg=theme.TEXT, bg=theme.BG_CARD_ALT)
@@ -652,7 +655,9 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(tk.Tk):
+class App(SaterMixin, tk.Tk):
+    SDR_LABELS = None  # rempli après la définition (libellés des modes)
+
     def __init__(self):
         super().__init__()
         # Par défaut, Tkinter attrape en interne toute exception levée
@@ -1156,6 +1161,8 @@ class App(tk.Tk):
 
     def show_page(self, key):
         mode = MODULE_SDR_MODE.get(key)
+        if key == "beacon":
+            mode = self._beacon_page_mode()  # 406, 121,5 ou goniométrie (pas de bascule)
         if key in EXTERNAL_TILES:
             url = EXTERNAL_TILES[key](self.config_data)
             # OpenWebRX met quelques secondes à démarrer : on n'ouvre le
@@ -1181,6 +1188,7 @@ class App(tk.Tk):
                 then()
             return
         if getattr(self, "_sdr_switching", False):
+            self._sdr_pending = (mode, then)  # appliqué dès la fin de la bascule en cours
             return
         self._sdr_switching = True
         label = SDR_MODE_LABELS.get(mode, mode)
@@ -1223,6 +1231,9 @@ class App(tk.Tk):
                 self.after(4000 if error is None else 0, then)
             # Rafraîchit tout de suite pour refléter le nouveau service.
             threading.Thread(target=self._refresh_once, daemon=True).start()
+            pending, self._sdr_pending = getattr(self, "_sdr_pending", None), None
+            if pending:
+                self._switch_sdr(*pending)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1253,6 +1264,8 @@ class App(tk.Tk):
         if key == "beacon" and not getattr(self, "_b406_poll_running", False):
             self._b406_poll_running = True
             self._beacon_poll()
+        if key == "beacon" and getattr(self, "_beacon_band", "406") in ("121", "gonio"):
+            self._elt_start_poll()
         if key == "aircraft" and not getattr(self, "_adsb_poll_running", False):
             self._adsb_poll_running = True
             self._adsb_poll()
@@ -1310,6 +1323,7 @@ class App(tk.Tk):
         self._fetch_vigilance()
         self._fetch_beacon(frames_only=getattr(self, "_current_view", None) != "beacon")
         self._fetch_s433()
+        self._elt_fetch_events_bg()
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -4061,7 +4075,7 @@ class App(tk.Tk):
         names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
         return names[int((deg % 360) / 22.5 + 0.5) % 16]
 
-    def _build_beacon_tab(self, frame):
+    def _build_b406_panel(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
         left = tk.Frame(outer, bg=theme.BG, width=800)
@@ -4209,7 +4223,7 @@ class App(tk.Tk):
                 self.b406_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
                 self.b406_info.config(text="Le service beacon406 (port 5009) ne répond pas — installez-le sur le Pi "
                                            "(install_beacon406.sh).")
-            if "beacon" in self.tile_chips:
+            if "beacon" in self.tile_chips and mode != "elt121":
                 self.tile_chips["beacon"].config(text="—")
             return
         frames = data.get("frames") or []
@@ -4277,7 +4291,7 @@ class App(tk.Tk):
                 text_color="#b91c1c" if real else "#a16207",
                 marker_color_circle="#7f1d1d" if real else "#713f12",
                 marker_color_outside="#ef4444" if real else "#f59e0b"))
-        if "beacon" in self.tile_chips:
+        if "beacon" in self.tile_chips and mode != "elt121":
             real = sum(1 for f in frames if not f.get("test") and time.time() - f.get("time", 0) < 86400)
             self.tile_chips["beacon"].config(
                 text=(f"⚠ {real} réelle(s) sur 24 h" if real else f"{len(frames)} trame(s)") if frames else "aucune trame")
@@ -5096,7 +5110,7 @@ class App(tk.Tk):
         btns.pack(anchor="w")
         tk.Label(btns, text="Donner la clé à :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left", padx=(0, 10))
         self.sdr_mode_buttons = {}
-        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "433", "openwebrx"):
+        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "433", "openwebrx"):
             b = tk.Button(
                 btns, text=SDR_MODE_LABELS[mode], font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
                 bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT, activeforeground="#1a1200",
@@ -5136,7 +5150,7 @@ class App(tk.Tk):
                 font=theme.FONT_BODY, highlightthickness=0, command=self._sdr_sched_show,
             ).pack(side="left", padx=(0, 16))
 
-        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "433", "openwebrx")]
+        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "433", "openwebrx")]
         self._sdr_label_to_mode = {v: k for k, v in SDR_MODE_LABELS.items()}
 
         editors = tk.Frame(plan, bg=theme.BG_CARD)
@@ -5864,6 +5878,9 @@ class App(tk.Tk):
     def _on_callback_exception(self, exc_type, exc_value, exc_tb):
         tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
         _log_crash(tb_text, context="callback")
+
+
+App.SDR_LABELS = SDR_MODE_LABELS
 
 
 def main():

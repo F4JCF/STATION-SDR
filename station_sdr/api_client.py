@@ -249,3 +249,30 @@ def restart_service(host: str, port: int, key: str) -> dict:
     resp = requests.post(url, timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_elt(host: str, port: int, what: str, **params):
+    """Veille 121,5 MHz (elt121) : status, level, waterfall ou events."""
+    resp = requests.get(f"http://{host}:{port}/api/elt121/{what}", params=params or None, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_elt_wav(host: str, port: int, rec: str = None, seconds: int = 10) -> bytes:
+    """Dernières secondes reçues sur 121,5 MHz, ou un enregistrement de détection (WAV)."""
+    url = f"http://{host}:{port}/api/elt121/" + (f"rec/{rec}" if rec else "audio")
+    resp = requests.get(url, params=None if rec else {"seconds": seconds}, timeout=15)
+    resp.raise_for_status()
+    return resp.content
+
+
+def set_elt_config(host: str, port: int, **conf) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/elt121/config", json=conf, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def elt_clear(host: str, port: int) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/elt121/clear", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
