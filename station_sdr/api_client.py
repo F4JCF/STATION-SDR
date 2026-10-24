@@ -276,3 +276,10 @@ def elt_clear(host: str, port: int) -> dict:
     resp = requests.post(f"http://{host}:{port}/api/elt121/clear", timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_adsb_stats(host: str, port: int) -> dict:
+    """Qualité de réception ADS-B de la dernière minute (via sdr_switch)."""
+    resp = requests.get(f"http://{host}:{port}/api/adsb/stats", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()

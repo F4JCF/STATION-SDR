@@ -1582,6 +1582,8 @@ class App(SaterMixin, tk.Tk):
             top_row, text="Avions : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
         )
         self.aircraft_count_label.pack(side="left")
+        self.adsb_pill = theme.pill(top_row, "—", theme.MUTED)
+        self.adsb_pill.pack(side="left", padx=(10, 0))
         self.aircraft_stats_label = tk.Label(top_row, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.aircraft_stats_label.pack(side="left", padx=(12, 0))
         ttk.Button(
@@ -1591,6 +1593,9 @@ class App(SaterMixin, tk.Tk):
             ),
         ).pack(side="right")
 
+        self.adsb_rx_label = tk.Label(wrapper, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                      anchor="w", justify="left", wraplength=750)
+        self.adsb_rx_label.pack(fill="x", padx=12, pady=(0, 4))
         search_row = tk.Frame(wrapper, bg=theme.BG)
         search_row.pack(fill="x", padx=12, pady=(0, 4))
         tk.Label(search_row, text="Rechercher (indicatif, hex, immat., type) :", bg=theme.BG, fg=theme.MUTED,
@@ -1993,7 +1998,55 @@ class App(SaterMixin, tk.Tk):
         port = self.config_data.get("port_adsb", 8504)
         threading.Thread(target=self._fetch, args=(lambda: api_client.get_aircraft(host, port), self._render_aircraft),
                          daemon=True).start()
+        self._adsb_tick = getattr(self, "_adsb_tick", 0) + 1
+        if self._adsb_tick % 3 == 1:
+            sw = self.config_data.get("port_sdr_switch", 5006)
+            threading.Thread(target=self._fetch_adsb_rx, args=(host, sw), daemon=True).start()
         self.after(3000, self._adsb_poll)
+
+    def _fetch_adsb_rx(self, host, port):
+        try:
+            st = api_client.get_adsb_stats(host, port)
+        except Exception:
+            st = None
+        self.after(0, self._render_adsb_rx, st)
+
+    def _render_adsb_rx(self, st):
+        """Pastille d'état de l'ADS-B : écoute réelle, en pause, ou aucun signal reçu."""
+        if not hasattr(self, "adsb_pill"):
+            return
+        mode = getattr(self, "_sdr_mode", None)
+        if mode not in (None, "adsb"):
+            txt = "CLÉ ARRÊTÉE" if mode == "off" else "EN PAUSE"
+            self.adsb_pill.config(text=f"  {txt}  ", bg=theme.MUTED)
+            self.adsb_rx_label.config(text=f"La clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)} : pas d'écoute ADS-B.",
+                                      fg=theme.MUTED)
+            return
+        rate = getattr(self, "_adsb_msg_rate", None)
+        if st is None:
+            ok = rate is not None and rate > 0.5
+            self.adsb_pill.config(text="  EN COURS  " if ok else "  ÉCOUTE ?  ", bg=theme.GREEN if ok else theme.ORANGE)
+            self.adsb_rx_label.config(text="" if ok else (
+                "Statistiques de réception indisponibles (cliquez « Mettre à jour le Pi » sur la page Santé)."),
+                fg=theme.MUTED)
+            return
+        n = st.get("messages_1min") or 0
+        sig, noise, gain = st.get("signal"), st.get("noise"), st.get("gain_db")
+        detail = (f"Dernière minute : {n} message(s) · signal {sig} dB · bruit {noise} dB"
+                  + (f" · gain {gain} dB" if gain is not None else "")
+                  + (f" · {st['strong_signals']} signaux forts" if st.get("strong_signals") else ""))
+        if n >= 30:
+            self.adsb_pill.config(text="  EN COURS  ", bg=theme.GREEN)
+            self.adsb_rx_label.config(text=detail, fg=theme.MUTED)
+        elif n > 0:
+            self.adsb_pill.config(text="  RÉCEPTION FAIBLE  ", bg=theme.ORANGE)
+            self.adsb_rx_label.config(text=detail + "\nTrès peu de messages : antenne, câble ou connecteur à vérifier "
+                                      "(le 1090 MHz supporte mal les câbles longs ou fins).", fg=theme.ORANGE)
+        else:
+            self.adsb_pill.config(text="  AUCUN SIGNAL  ", bg=theme.RED)
+            self.adsb_rx_label.config(text=detail + "\nLe décodeur tourne mais ne reçoit rien sur 1090 MHz : vérifier "
+                                      "que l'antenne arrive bien sur la clé SDR, le câble et les adaptateurs.",
+                                      fg=theme.RED)
 
     def _render_aircraft(self, data, error):
         if error:

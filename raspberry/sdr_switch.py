@@ -568,6 +568,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _mode_status())
         elif path == "/api/system/health":
             self._send(200, _health())
+        elif path == "/api/adsb/stats":
+            # Qualité de réception ADS-B (readsb) sur la dernière minute.
+            try:
+                with open("/run/readsb/stats.json", encoding="utf-8") as f:
+                    st = json.load(f)
+                loc = (st.get("last1min") or {}).get("local") or {}
+                acc = loc.get("accepted")
+                self._send(200, {"time": st.get("now"), "signal": loc.get("signal"), "noise": loc.get("noise"),
+                                 "peak_signal": loc.get("peak_signal"), "strong_signals": loc.get("strong_signals"),
+                                 "gain_db": st.get("gain_db", loc.get("gain_db")),
+                                 "messages_1min": sum(acc) if isinstance(acc, list) else acc,
+                                 "samples_dropped": loc.get("samples_dropped")})
+            except (OSError, ValueError) as exc:
+                self._send(404, {"error": f"statistiques readsb indisponibles ({exc})"})
         elif path == "/api/system/logs":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
