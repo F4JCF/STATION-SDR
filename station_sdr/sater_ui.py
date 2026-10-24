@@ -21,9 +21,17 @@ from .config import save_config
 
 STATION = (43.590541, 7.002072)   # F4JCF, JN33LP
 TEAM_COLORS = ["#2563eb", "#16a34a", "#9333ea", "#0891b2", "#ca8a04", "#db2777", "#4b5563", "#ea580c"]
-BANDS = (("406", "406 MHz · décodage COSPAS-SARSAT"), ("121", "121,5 MHz · sirène (radioralliement)"),
+BANDS = (("406", "406 MHz · décodage COSPAS-SARSAT"), ("121", "121,5 / 141,375 MHz · sirène"),
          ("gonio", "Goniométrie · zone probable"))
 BAND_MODE = {"406": "beacon", "121": "elt121"}
+# Fréquences de veille de la sirène : (MHz, libellé du bouton)
+ELT_PRESETS = ((121.5, "121,500 · détresse réelle"), (141.375, "141,375 · exercice ADRASEC"),
+               (243.0, "243,000 · militaire"))
+EXERCISE_FREQS = {141.375}
+
+
+def freq_txt(f):
+    return f"{float(f):.3f}".replace(".", ",")
 
 
 def _palette():
@@ -114,20 +122,30 @@ class SaterMixin:
         st.configure(padding=12)
         row = tk.Frame(st, bg=theme.BG_CARD)
         row.pack(fill="x")
-        tk.Label(row, text="Veille 121,5 MHz", bg=theme.BG_CARD, fg=theme.TEXT,
-                 font=theme.FONT_SECTION).pack(side="left")
+        self.elt_title = tk.Label(row, text="Veille 121,500 MHz", bg=theme.BG_CARD, fg=theme.TEXT,
+                                  font=theme.FONT_SECTION)
+        self.elt_title.pack(side="left")
         self.elt_pill = theme.pill(row, "INCONNU", theme.MUTED)
         self.elt_pill.pack(side="left", padx=(12, 0))
         ttk.Button(row, text="Effacer", style="Flat.TButton",
                    command=self._elt_clear).pack(side="right")
-        ttk.Button(row, text="Écouter le 121,5 MHz", style="Accent.TButton",
+        ttk.Button(row, text="Écouter", style="Accent.TButton",
                    command=lambda: self._switch_sdr("elt121")).pack(side="right", padx=(0, 8))
+        pf = tk.Frame(st, bg=theme.BG_CARD)
+        pf.pack(fill="x", pady=(8, 0))
+        self.elt_preset_btns = {}
+        for f, txt in ELT_PRESETS:
+            b = tk.Button(pf, text=txt, font=theme.FONT_BODY_BOLD, relief="flat", bd=0, padx=12, pady=5,
+                          cursor="hand2", bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT,
+                          activeforeground="#1a1200", command=lambda f=f: self._elt_preset(f))
+            b.pack(side="left", padx=(0, 6))
+            self.elt_preset_btns[f] = b
         cf = tk.Frame(st, bg=theme.BG_CARD)
         cf.pack(fill="x", pady=(8, 0))
         tk.Label(cf, text="Fréquence (MHz) :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left")
         self.elt_freq_var = tk.StringVar(value="121,500")
         ttk.Combobox(cf, textvariable=self.elt_freq_var, width=9,
-                     values=("121,500", "243,000", "121,375", "121,775")).pack(side="left", padx=(4, 12))
+                     values=("121,500", "141,375", "243,000", "121,375", "121,775")).pack(side="left", padx=(4, 12))
         tk.Label(cf, text="Gain (dB) :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left")
         self.elt_gain_var = tk.StringVar(value="40")
         ttk.Combobox(cf, textvariable=self.elt_gain_var, width=5,
@@ -262,14 +280,16 @@ class SaterMixin:
             if time.time() - (e.get("start") or 0) > 600:
                 continue
             self._raise_alert(
-                f"elt:{int(e['start'])}", "Sirène de balise sur 121,5 MHz",
+                f"elt:{int(e['start'])}",
+                ("Sirène d'EXERCICE" if round(float(e.get('freq_mhz') or 0), 3) in EXERCISE_FREQS else "Sirène de balise")
+                + f" sur {freq_txt(e.get('freq_mhz') or 121.5)} MHz",
                 f"Détectée à {time.strftime('%H:%M:%S', time.localtime(e['start']))} sur {e.get('freq_mhz')} MHz\n"
                 f"Niveau : +{e.get('max_above_db')} dB au-dessus du bruit · {e.get('sweeps_per_s')} balayages/s "
                 f"({e.get('direction') or '?'})\nRéécouter : Balises de détresse → 121,5 MHz.", cooldown=900)
         if status is not None and "beacon" in self.tile_chips:
             self.tile_chips["beacon"].config(
-                text=("⚠ SIRÈNE 121,5" if status.get("active") else
-                      f"121,5 : veille · {status.get('events_today', 0)} détection(s)"))
+                text=(f"⚠ SIRÈNE {freq_txt(status.get('freq_mhz') or 121.5)}" if status.get("active") else
+                      f"{freq_txt(status.get('freq_mhz') or 121.5)} : veille · {status.get('events_today', 0)} détection(s)"))
 
     def _elt_render(self, data, error):
         if not hasattr(self, "elt_pill"):
@@ -302,11 +322,19 @@ class SaterMixin:
         self._gonio_station_line(st)
         if "beacon" in self.tile_chips and mode == "elt121":
             self.tile_chips["beacon"].config(
-                text="⚠ SIRÈNE 121,5" if st.get("active") else f"121,5 : veille · {st.get('events_today', 0)} détection(s)")
+                text=(f"⚠ SIRÈNE {freq_txt(st.get('freq_mhz') or 121.5)}" if st.get("active")
+                      else f"{freq_txt(st.get('freq_mhz') or 121.5)} : veille · {st.get('events_today', 0)} détection(s)"))
         if not hasattr(self, "_elt_conf_loaded"):
             self._elt_conf_loaded = True
             self.elt_freq_var.set(f"{st.get('freq_mhz', 121.5):.3f}".replace(".", ","))
             self.elt_gain_var.set(f"{st.get('gain', 40):g}")
+        fq = float(st.get("freq_mhz") or 121.5)
+        exo = round(fq, 3) in EXERCISE_FREQS
+        self.elt_title.config(text=f"Veille {freq_txt(fq)} MHz" + (" — EXERCICE" if exo else ""),
+                              fg=theme.ORANGE if exo else theme.TEXT)
+        for f, b in self.elt_preset_btns.items():
+            on = abs(f - fq) < 0.0005
+            b.config(bg=theme.ACCENT if on else theme.BG_CARD_ALT, fg="#1a1200" if on else theme.TEXT)
         if st.get("running"):
             self.elt_pill.config(text="  SIRÈNE DÉTECTÉE  " if st.get("active") else "  VEILLE  ",
                                  bg=theme.RED if st.get("active") else theme.GREEN)
@@ -314,17 +342,18 @@ class SaterMixin:
             self.elt_pill.config(text="  ARRÊTÉ  ", bg=theme.RED)
         err = f"\n⚠ {st['error']}" if st.get("error") else ""
         self.elt_info.config(text=(
-            f"{st.get('freq_mhz', 0):.3f} MHz AM · gain {st.get('gain')} dB · ressemblance avec une sirène : "
+            f"{freq_txt(st.get('freq_mhz', 0))} MHz AM · gain {st.get('gain')} dB · ressemblance avec une sirène : "
             f"{round((st.get('score') or 0) * 100)} % (tonalité {round((st.get('tonal') or 0) * 100)} %, "
             f"écart {st.get('span_hz', 0)} Hz, {st.get('sweeps_per_s', 0)} balayage(s)/s"
             f"{', ' + st['direction'] if st.get('direction') else ''})\n"
             f"{st.get('events_today', 0)} détection(s) aujourd'hui · veille permanente : la clé reste sur cette "
-            f"fréquence jusqu'à ce que vous la changiez{err}").replace(".", ",", 1),
+            f"fréquence jusqu'à ce que vous la changiez{err}"),
             fg=theme.ORANGE if err else theme.MUTED)
         if st.get("active"):
             since = time.time() - (st.get("active_since") or time.time())
-            self.elt_state.config(text=f"🆘  SIRÈNE DÉTECTÉE depuis {int(since // 60)} min {int(since % 60):02d} s",
-                                  bg=theme.RED, fg="#0b0f17")
+            self.elt_state.config(text=(f"🆘  SIRÈNE {'D’EXERCICE ' if exo else ''}DÉTECTÉE sur {freq_txt(fq)} MHz "
+                                        f"depuis {int(since // 60)} min {int(since % 60):02d} s"),
+                                  bg=theme.ORANGE if exo else theme.RED, fg="#0b0f17")
         else:
             self.elt_state.config(text="Veille — aucune sirène en ce moment" if st.get("running") else "Écoute arrêtée",
                                   bg=theme.BG_CARD_ALT, fg=theme.TEXT)
@@ -457,7 +486,7 @@ class SaterMixin:
                 "en cours" if en is None else time.strftime("%H:%M:%S", time.localtime(en)),
                 f"{int(dur // 60)} min {int(dur % 60):02d} s",
                 f"+{e.get('max_above_db')} dB".replace(".", ","),
-                f"{e.get('freq_mhz', 0):.3f}".replace(".", ","),
+                freq_txt(e.get('freq_mhz', 0)),
                 f"{e.get('sweeps_per_s')}/s {'↓' if e.get('direction') == 'descendant' else '↑'}"))
         for s in sel:
             if tree.exists(s):
@@ -531,6 +560,13 @@ class SaterMixin:
                     f.write(data)
 
         self._elt_get_wav(rec, 30, done)
+
+    def _elt_preset(self, freq):
+        """Bouton de fréquence : règle la veille et lui donne la clé."""
+        self.elt_freq_var.set(freq_txt(freq))
+        self._elt_apply()
+        if getattr(self, "_sdr_mode", None) != "elt121":
+            self._switch_sdr("elt121")
 
     def _elt_apply(self):
         try:
