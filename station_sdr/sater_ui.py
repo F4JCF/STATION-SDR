@@ -318,7 +318,8 @@ class SaterMixin:
             f"{round((st.get('score') or 0) * 100)} % (tonalité {round((st.get('tonal') or 0) * 100)} %, "
             f"écart {st.get('span_hz', 0)} Hz, {st.get('sweeps_per_s', 0)} balayage(s)/s"
             f"{', ' + st['direction'] if st.get('direction') else ''})\n"
-            f"{st.get('events_today', 0)} détection(s) aujourd'hui{err}").replace(".", ",", 1),
+            f"{st.get('events_today', 0)} détection(s) aujourd'hui · veille permanente : la clé reste sur cette "
+            f"fréquence jusqu'à ce que vous la changiez{err}").replace(".", ",", 1),
             fg=theme.ORANGE if err else theme.MUTED)
         if st.get("active"):
             since = time.time() - (st.get("active_since") or time.time())

@@ -1163,6 +1163,14 @@ class App(SaterMixin, tk.Tk):
         mode = MODULE_SDR_MODE.get(key)
         if key == "beacon":
             mode = self._beacon_page_mode()  # 406, 121,5 ou goniométrie (pas de bascule)
+        if mode and mode != "elt121" and getattr(self, "_sdr_mode", None) == "elt121":
+            # Veille 121,5 MHz : ouvrir une page ne retire pas la clé sans l'accord de l'opérateur.
+            label = SDR_MODE_LABELS.get(mode, mode)
+            if not messagebox.askyesno(
+                    "Veille 121,5 MHz",
+                    f"La clé SDR est en veille permanente sur le 121,5 MHz.\n\nArrêter cette veille et "
+                    f"donner la clé à {label} ?\n\n(Non : la page s'ouvre, la veille 121,5 continue.)"):
+                mode = None
         if key in EXTERNAL_TILES:
             url = EXTERNAL_TILES[key](self.config_data)
             # OpenWebRX met quelques secondes à démarrer : on n'ouvre le
@@ -4925,7 +4933,7 @@ class App(SaterMixin, tk.Tk):
             if self.config_data.get("iss_auto") and nxt is not None:
                 active = nxt["aos"] - 30 <= now <= nxt["los"]
                 mode = getattr(self, "_sdr_mode", None)
-                if active and mode != "iss" and self._iss_auto_prev is None and mode != "off":
+                if active and mode not in ("iss", "off", "elt121") and self._iss_auto_prev is None:
                     self._iss_auto_prev = mode or "aprs"
                     self._switch_sdr("iss")
                 elif not active and self._iss_auto_prev is not None:
@@ -5313,6 +5321,10 @@ class App(SaterMixin, tk.Tk):
         if mode != "off":
             parts.append(f"partage : {names.get(sched.get('type'), '—')}")
         hold = data.get("hold_until")
+        if data.get("sticky") or mode == "elt121":
+            parts.append("VEILLE PERMANENTE : le partage automatique ne reprend pas la clé")
+            hold = None
+            data = dict(data, next_change=None)
         if hold and hold > time.time():
             parts.append(f"pause jusqu'à {time.strftime('%H:%M', time.localtime(hold))}")
         nxt = data.get("next_change")

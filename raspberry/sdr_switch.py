@@ -57,6 +57,10 @@ LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
+# Modules de veille de sécurité : une fois la clé donnée par l'opérateur,
+# le partage automatique (rotation / planning) ne la reprend jamais ; elle
+# y reste jusqu'à une nouvelle bascule manuelle.
+STICKY_MODES = {"elt121"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("sdr-switch")
@@ -279,6 +283,9 @@ def _scheduler_loop() -> None:
                 _sched_state["next_change"] = None
             if _read_mode() == OFF:
                 wanted = None  # clé arrêtée volontairement : le planning attend
+            if _read_mode() in STICKY_MODES:
+                wanted = None  # veille permanente (121,5 MHz) jusqu'à action de l'opérateur
+                _sched_state["next_change"] = None
             if wanted and now >= _sched_state["hold_until"] and wanted != _read_mode() and UNITS.get(wanted):
                 log.info("Planning (%s) : bascule vers %s", sched["type"], wanted)
                 switch_to(wanted)
@@ -536,6 +543,7 @@ def _mode_status() -> dict:
         "schedule": sched,
         "hold_until": _sched_state["hold_until"] or None,
         "next_change": _sched_state["next_change"],
+        "sticky": mode in STICKY_MODES,
         "labels": LABELS,
         "last_mode": _read_last_mode(),
         "pi_version": _read_pi_version(),
