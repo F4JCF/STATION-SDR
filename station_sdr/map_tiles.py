@@ -57,8 +57,8 @@ _lock = threading.Lock()
 
 
 def _cache_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-    path = Path(base) / "STATION-SDR" / "tiles" if base else Path.home() / ".station-sdr" / "tiles"
+    from .plat import cache_dir
+    path = cache_dir() / "tiles"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

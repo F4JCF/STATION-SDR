@@ -1,5 +1,8 @@
 name: Build and release Windows executable
 
+# Compile STATION-SDR pour Windows (.exe) et Linux (PC x86_64 et ARM 64 bits,
+# ex. Raspberry Pi), puis publie les trois fichiers dans la même Release.
+
 on:
   push:
     tags:
@@ -14,7 +17,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -43,11 +46,91 @@ jobs:
             --hidden-import pystray._win32 `
             --collect-all tkintermapview --collect-all PIL run.py
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/STATION-SDR.exe
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtk8.6 libtcl8.6 tk-dev xvfb
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          python -c "import tkinter; print('Tk', tkinter.TkVersion)"
+
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --windowed --name STATION-SDR \
+            --add-data "station_sdr/assets/logo.png:assets" \
+            --add-data "station_sdr/assets/icon.ico:assets" \
+            --add-data "station_sdr/assets/flags.json:assets" \
+            --hidden-import PIL._tkinter_finder \
+            --collect-all tkintermapview --collect-all PIL run.py
+          mv dist/STATION-SDR "dist/STATION-SDR-linux-${{ matrix.arch }}"
+          chmod 755 "dist/STATION-SDR-linux-${{ matrix.arch }}"
+
+      - name: Smoke test (démarrage 20 s sous Xvfb)
+        run: |
+          set +e
+          rm -f /tmp/station_sdr_crash.log
+          timeout 20 xvfb-run -a "dist/STATION-SDR-linux-${{ matrix.arch }}"
+          code=$?
+          set -e
+          if [ -f /tmp/station_sdr_crash.log ]; then cat /tmp/station_sdr_crash.log; fi
+          if grep -q "démarrage" /tmp/station_sdr_crash.log 2>/dev/null; then exit 1; fi
+          if [ "$code" != "124" ] && [ "$code" != "0" ]; then echo "Code de sortie $code"; exit 1; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/STATION-SDR-linux-${{ matrix.arch }}
+
+  release:
+    # La version Windows est publiée même si une compilation Linux échoue.
+    needs: [windows, linux]
+    if: ${{ always() && needs.windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: dist/STATION-SDR.exe
+          files: |
+            out/STATION-SDR.exe
+            out/STATION-SDR-linux-x86_64
+            out/STATION-SDR-linux-arm64
+          fail_on_unmatched_files: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

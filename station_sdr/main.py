@@ -41,6 +41,7 @@ from .version import __version__
 from .aircraft_db import RouteCache, TarDb
 from . import aprs_parse, map_tiles, sat_predict
 from .sater_ui import SaterMixin
+from . import plat
 from .icao_ranges import icao_country
 
 APP_TITLE = f"STATION-SDR v{__version__}"
@@ -659,7 +660,7 @@ class App(SaterMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
-        super().__init__()
+        super().__init__(className="STATION-SDR")
         # Par défaut, Tkinter attrape en interne toute exception levée
         # dans un callback (bind/after/command=...) et se contente de
         # l'imprimer sur stderr — invisible dans un exécutable --windowed
@@ -671,9 +672,19 @@ class App(SaterMixin, tk.Tk):
         self.geometry("1040x680")
         self.minsize(860, 560)
         try:
-            self.iconbitmap(default=_resource_path("assets/icon.ico"))
+            if plat.WINDOWS:
+                self.iconbitmap(default=_resource_path("assets/icon.ico"))
+            else:
+                self._app_icon = ImageTk.PhotoImage(Image.open(_resource_path("assets/logo.png")).resize((128, 128)))
+                self.iconphoto(True, self._app_icon)
         except Exception:
-            pass  # icône absente (dev) ou plateforme ne supportant pas .ico
+            pass  # icône absente (dev)
+        if plat.LINUX:
+            self.after(1500, lambda: plat.install_menu_entry(_resource_path("assets/logo.png")))
+            try:
+                self.attributes("-zoomed", True)  # plein écran fenêtré, comme sous Windows
+            except tk.TclError:
+                pass
 
         self.config_data = load_config()
         self._stop_event = threading.Event()
@@ -706,6 +717,8 @@ class App(SaterMixin, tk.Tk):
     RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
     def _autostart_enabled(self):
+        if plat.LINUX:
+            return plat.linux_autostart_enabled()
         if sys.platform != "win32":
             return False
         try:
@@ -718,6 +731,13 @@ class App(SaterMixin, tk.Tk):
 
     def _toggle_autostart(self):
         want = bool(self._autostart_var.get())
+        if plat.LINUX and getattr(sys, "frozen", False):
+            try:
+                plat.linux_set_autostart(want)
+            except OSError as exc:
+                messagebox.showerror("Démarrage automatique", f"Réglage impossible : {exc}")
+                self._autostart_var.set(not want)
+            return
         if sys.platform != "win32" or not getattr(sys, "frozen", False):
             messagebox.showinfo("Démarrage avec Windows", "Disponible uniquement avec STATION-SDR.exe sous Windows.")
             self._autostart_var.set(False)
@@ -855,7 +875,7 @@ class App(SaterMixin, tk.Tk):
         app_menu.add_command(label="Arrêter la clé SDR", command=lambda: self._stop_sdr())
         app_menu.add_separator()
         self._autostart_var = tk.BooleanVar(value=self._autostart_enabled())
-        app_menu.add_checkbutton(label="Lancer au démarrage de Windows", variable=self._autostart_var,
+        app_menu.add_checkbutton(label="Lancer au démarrage de Windows" if plat.WINDOWS else "Lancer à l'ouverture de session", variable=self._autostart_var,
                                  command=self._toggle_autostart)
         self._close_tray_var = tk.BooleanVar(value=self.config_data.get("close_to_tray", True))
         app_menu.add_checkbutton(label="Fermer = réduire près de l'horloge", variable=self._close_tray_var,
@@ -3200,12 +3220,7 @@ class App(SaterMixin, tk.Tk):
 
     def _alert_sound(self):
         def play():
-            try:
-                import winsound
-                for _ in range(3):
-                    winsound.Beep(1200, 250)
-                    winsound.Beep(800, 250)
-            except Exception:
+            if not plat.alert_sound():
                 try:
                     self.after(0, self.bell)
                 except Exception:
@@ -4074,7 +4089,8 @@ class App(SaterMixin, tk.Tk):
                 d = r.json()
                 self.after(0, lambda: messagebox.showinfo(d.get("title", "Rapport"), d.get("body", "")))
             except Exception as exc:
-                self.after(0, lambda: self.nt_status.config(text=f"Aperçu impossible : {exc}", fg=theme.RED))
+                msg = f"Aperçu impossible : {exc}"
+                self.after(0, lambda: self.nt_status.config(text=msg, fg=theme.RED))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -5898,7 +5914,8 @@ class App(SaterMixin, tk.Tk):
         import os
         import tempfile
 
-        dest = os.path.join(tempfile.gettempdir(), info["asset_name"])
+        dest = (plat.linux_update_dest() if not plat.WINDOWS
+                else os.path.join(tempfile.gettempdir(), info["asset_name"]))
         try:
             updater.download_asset(info["asset_url"], token, dest)
         except requests.RequestException as exc:
@@ -5919,7 +5936,10 @@ class App(SaterMixin, tk.Tk):
             "redémarrer automatiquement avec la nouvelle version.",
         )
         try:
-            updater.apply_update_and_restart(dest)
+            if plat.WINDOWS:
+                updater.apply_update_and_restart(dest)
+            else:
+                plat.linux_apply_update_and_restart(dest)
         except Exception as exc:
             messagebox.showerror(
                 "Mise à jour",

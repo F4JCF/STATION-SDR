@@ -8,7 +8,6 @@ lecture seule ou effacé lors d'une mise à jour).
 """
 
 import json
-import os
 from pathlib import Path
 
 APP_NAME = "STATION-SDR"
@@ -42,11 +41,9 @@ DEFAULT_CONFIG = {
 
 
 def _config_dir() -> Path:
-    base = os.environ.get("APPDATA")
-    if base:
-        return Path(base) / APP_NAME
-    # Repli pour les environnements non-Windows (développement/tests)
-    return Path.home() / f".{APP_NAME.lower()}"
+    # Windows : %APPDATA%\\STATION-SDR ; Linux : ~/.config/STATION-SDR
+    from .plat import config_dir
+    return config_dir()
 
 
 def _config_path() -> Path:

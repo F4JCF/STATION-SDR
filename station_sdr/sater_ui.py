@@ -7,8 +7,6 @@
   estimation de la zone d'émission (exercices et recherches type SATER).
 """
 
-import os
-import tempfile
 import threading
 import time
 import tkinter as tk
@@ -16,7 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from . import api_client, gonio, theme
+from . import api_client, gonio, plat, theme
 from .config import save_config
 
 STATION = (43.590541, 7.002072)   # F4JCF, JN33LP
@@ -525,27 +523,13 @@ class SaterMixin:
                 return
 
             def play():
-                try:
-                    import winsound
-                    winsound.PlaySound(data, winsound.SND_MEMORY)
-                except Exception:
-                    try:
-                        path = os.path.join(tempfile.gettempdir(), "station_sdr_121.wav")
-                        with open(path, "wb") as f:
-                            f.write(data)
-                        os.startfile(path)  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                plat.play_wav(data, wait=True)
             threading.Thread(target=play, daemon=True).start()
 
         self._elt_get_wav(rec, 10, done)
 
     def _elt_stop_sound(self):
-        try:
-            import winsound
-            winsound.PlaySound(None, 0)
-        except Exception:
-            pass
+        plat.stop_sound()
 
     def _elt_save(self, rec):
         def done(data, err):

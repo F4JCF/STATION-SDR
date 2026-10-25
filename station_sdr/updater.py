@@ -76,10 +76,12 @@ def check_for_update(github_token: str = "") -> dict | None:
     if _parse_version(latest_tag) <= _parse_version(f"v{__version__}"):
         return None
 
-    exe_asset = next(
-        (a for a in data.get("assets", []) if a["name"].lower().endswith(".exe")),
-        None,
-    )
+    if sys.platform == "win32":
+        exe_asset = next((a for a in data.get("assets", []) if a["name"].lower().endswith(".exe")), None)
+    else:
+        from .plat import linux_asset_name
+        wanted = linux_asset_name()
+        exe_asset = next((a for a in data.get("assets", []) if a["name"] == wanted), None)
     if not exe_asset:
         return None
 

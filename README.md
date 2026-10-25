@@ -239,3 +239,21 @@ seconde), niveau au-dessus du bruit, enregistrements audio des détections.
 Dans l'appli, la vignette « Balises de détresse » a trois onglets :
 406 MHz, 121,5 MHz et Goniométrie (relèvements des équipes, tracé sur la
 carte, zone probable, compte rendu à copier).
+
+## Linux
+
+Chaque version publie aussi un exécutable Linux prêt à lancer (aucune
+installation de Python) :
+
+- `STATION-SDR-linux-x86_64` : PC (Ubuntu, Mint, Debian…) ;
+- `STATION-SDR-linux-arm64` : Raspberry Pi OS 64 bits avec bureau, autres cartes ARM 64 bits.
+
+```
+chmod +x STATION-SDR-linux-x86_64
+./STATION-SDR-linux-x86_64
+```
+
+Au premier lancement, un raccourci « STATION-SDR » est ajouté au menu des
+applications. Réglages dans `~/.config/STATION-SDR`. La mise à jour
+automatique remplace le fichier sur place. Son des alertes et des
+enregistrements : `paplay` (PulseAudio / PipeWire) ou `aplay`.

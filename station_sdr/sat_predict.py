@@ -6,7 +6,6 @@ cache sur le PC et rafraîchis toutes les 12 heures.
 
 import json
 import math
-import os
 import time
 from pathlib import Path
 
@@ -39,8 +38,8 @@ FAVORITES = [
 
 
 def _cache_file() -> Path:
-    base = os.environ.get("APPDATA") or str(Path.home())
-    p = Path(base) / "STATION-SDR"
+    from .plat import cache_dir
+    p = cache_dir()
     p.mkdir(parents=True, exist_ok=True)
     return p / "tle_cache.json"
 
