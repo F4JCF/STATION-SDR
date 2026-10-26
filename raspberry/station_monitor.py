@@ -403,7 +403,7 @@ def collect_once(state: dict) -> None:
     elt = fetch_json("http://127.0.0.1:5011/api/elt121/events") or []
     for e in elt[:1] if isinstance(elt, list) else []:
         if time.time() - (e.get("start") or 0) < 600 and event_once("elt121", 900):
-            exo = abs(float(e.get("freq_mhz") or 0) - 121.475) < 0.001
+            exo = abs(float(e.get("freq_mhz") or 0) - 121.375) < 0.001
             notify(("Sirène d'EXERCICE" if exo else "Sirène de balise") + f" sur {e.get('freq_mhz')} MHz",
                    f"Détectée à {time.strftime('%H:%M:%S', time.localtime(e['start']))} sur "
                    f"{e.get('freq_mhz')} MHz, {e.get('max_above_db')} dB au-dessus du bruit, "

@@ -94,7 +94,7 @@ HOME_TILES = [
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
     ("aprs", "APRS", "iGate LoRa + VHF 144,800"),
     ("ais", "AIS", "Trafic maritime"),
-    ("beacon", "Balises de détresse", "406 · 121,5 · 121,475 MHz · goniométrie"),
+    ("beacon", "Balises de détresse", "406 · 121,5 · 121,375 MHz · goniométrie"),
     ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),

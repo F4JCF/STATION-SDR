@@ -7,4 +7,4 @@ workflow GitHub Actions tag-on-version.yml, qui déclenche ensuite build.yml
 pour compiler et publier la Release — aucune étape manuelle n'est requise.
 """
 
-__version__ = "1.25.1"
+__version__ = "1.25.2"
