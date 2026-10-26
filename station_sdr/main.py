@@ -2251,6 +2251,7 @@ class App(SaterMixin, tk.Tk):
         ttk.Button(r1, text="Page de l'iGate", style="Flat.TButton",
                    command=lambda: self._open_url(f"http://{self.config_data.get('lora_igate_host', '192.168.1.154')}/")
                    ).pack(side="right")
+        ttk.Button(r1, text="Adresse…", style="Flat.TButton", command=self._lora_set_host).pack(side="right", padx=(0, 6))
         self.lora_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, anchor="w")
         self.lora_info.pack(anchor="w", pady=(2, 8))
         r2 = tk.Frame(st, bg=theme.BG_CARD)
@@ -2329,6 +2330,20 @@ class App(SaterMixin, tk.Tk):
         self._aprs_poll_running = False
 
     # -- LoRa (lu directement depuis le PC sur la page web de l'iGate)
+
+    def _lora_set_host(self):
+        cur = self.config_data.get("lora_igate_host", "192.168.1.154")
+        new = simpledialog.askstring(
+            "Adresse de l'iGate LoRa",
+            "Adresse IP de l'iGate F4JCF-10 sur le réseau local\n(visible dans la Freebox, liste des appareils) :",
+            initialvalue=cur, parent=self)
+        if new and new.strip() and new.strip() != cur:
+            self.config_data["lora_igate_host"] = new.strip()
+            try:
+                save_config(self.config_data)
+            except Exception:
+                pass
+            threading.Thread(target=self._fetch_lora, daemon=True).start()
 
     def _fetch_lora(self):
         host = self.config_data.get("lora_igate_host", "192.168.1.154")
