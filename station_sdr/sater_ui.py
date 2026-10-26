@@ -19,13 +19,13 @@ from .config import save_config
 
 STATION = (43.590541, 7.002072)   # F4JCF, JN33LP
 TEAM_COLORS = ["#2563eb", "#16a34a", "#9333ea", "#0891b2", "#ca8a04", "#db2777", "#4b5563", "#ea580c"]
-BANDS = (("406", "406 MHz · décodage COSPAS-SARSAT"), ("121", "121,5 / 141,375 MHz · sirène"),
+BANDS = (("406", "406 MHz · décodage COSPAS-SARSAT"), ("121", "121,5 / 121,475 MHz · sirène"),
          ("gonio", "Goniométrie · zone probable"))
 BAND_MODE = {"406": "beacon", "121": "elt121"}
 # Fréquences de veille de la sirène : (MHz, libellé du bouton)
-ELT_PRESETS = ((121.5, "121,500 · détresse réelle"), (141.375, "141,375 · exercice ADRASEC"),
+ELT_PRESETS = ((121.5, "121,500 · détresse réelle"), (121.475, "121,475 · exercice ADRASEC"),
                (243.0, "243,000 · militaire"))
-EXERCISE_FREQS = {141.375}
+EXERCISE_FREQS = {121.475}
 
 
 def freq_txt(f):
@@ -143,7 +143,7 @@ class SaterMixin:
         tk.Label(cf, text="Fréquence (MHz) :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left")
         self.elt_freq_var = tk.StringVar(value="121,500")
         ttk.Combobox(cf, textvariable=self.elt_freq_var, width=9,
-                     values=("121,500", "141,375", "243,000", "121,375", "121,775")).pack(side="left", padx=(4, 12))
+                     values=("121,500", "121,475", "243,000", "121,375", "121,775")).pack(side="left", padx=(4, 12))
         tk.Label(cf, text="Gain (dB) :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left")
         self.elt_gain_var = tk.StringVar(value="40")
         ttk.Combobox(cf, textvariable=self.elt_gain_var, width=5,
