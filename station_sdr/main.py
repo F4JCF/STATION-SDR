@@ -41,6 +41,7 @@ from .version import __version__
 from .aircraft_db import RouteCache, TarDb
 from . import aprs_parse, map_tiles, sat_predict
 from .sater_ui import SaterMixin
+from .pocsag_ui import PocsagMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -96,6 +97,7 @@ HOME_TILES = [
     ("ais", "AIS", "Trafic maritime"),
     ("beacon", "Balises de détresse", "406 · 121,5 · 121,375 MHz · goniométrie"),
     ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
+    ("pocsag", "POCSAG", "Radiomessagerie · DAPNET 439,9875"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Clé SDR", "Pilotage et partage automatique"),
@@ -117,9 +119,10 @@ MODULE_SDR_MODE = {
     "openwebrx": "openwebrx",
     "beacon": "beacon",
     "s433": "433",
+    "pocsag": "pocsag",
 }
 SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "off": "arrêtée"}
+                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -375,6 +378,14 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
         d.ellipse([*pt(0.34, 0.62), *pt(0.62, 0.92)], outline=color, width=lw)
         d.arc([*pt(0.58, 0.18), *pt(0.86, 0.54)], start=300, end=60, fill=color, width=lw)
         d.arc([*pt(0.64, 0.08), *pt(1.02, 0.64)], start=300, end=60, fill=color, width=lw)
+    elif key == "pocsag":
+        # récepteur de radiomessagerie : boîtier, écran, touches, ondes
+        d.rounded_rectangle([*pt(0.10, 0.30), *pt(0.80, 0.90)], radius=size * 0.08, outline=color, width=lw)
+        d.rectangle([*pt(0.20, 0.40), *pt(0.70, 0.62)], outline=color, width=max(1, lw - 1))
+        for x in (0.26, 0.45, 0.64):
+            d.ellipse([*pt(x - 0.04, 0.72), *pt(x + 0.04, 0.80)], fill=color)
+        d.arc([*pt(0.66, 0.02), *pt(0.98, 0.34)], start=270, end=360, fill=color, width=lw)
+        d.arc([*pt(0.74, 0.10), *pt(0.90, 0.26)], start=270, end=360, fill=color, width=lw)
     elif key == "sats":
         # satellite : corps + panneaux + orbite
         d.rectangle([*pt(0.42, 0.40), *pt(0.58, 0.60)], outline=color, width=lw)
@@ -656,7 +667,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -1002,6 +1013,7 @@ class App(SaterMixin, tk.Tk):
         self._build_ais_tab(self.pages["ais"])
         self._build_beacon_tab(self.pages["beacon"])
         self._build_s433_tab(self.pages["s433"])
+        self._build_pocsag_tab(self.pages["pocsag"])
         self._build_sat_tab(self.pages["sats"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
@@ -1281,6 +1293,8 @@ class App(SaterMixin, tk.Tk):
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
 
         self._current_view = key
+        if key == "pocsag":
+            self._pocsag_start_poll()
         if key == "s433" and not getattr(self, "_s433_poll_running", False):
             self._s433_poll_running = True
             self._s433_poll()
@@ -1352,6 +1366,7 @@ class App(SaterMixin, tk.Tk):
         self._fetch_beacon(frames_only=getattr(self, "_current_view", None) != "beacon")
         self._fetch_s433()
         self._elt_fetch_events_bg()
+        self._pocsag_fetch_bg()
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -3988,6 +4003,7 @@ class App(SaterMixin, tk.Tk):
             "squawk": "Squawk 7700/7600/7500", "sart": "Balises AIS SART/EPIRB/MOB", "aprs_msg": "Messages APRS",
             "winlink": "Courrier Winlink", "undervoltage": "Sous-tension du Pi", "dongle": "Clé SDR disparue",
             "vigilance": "Vigilance orange/rouge", "beacon": "Balise 406 réelle", "beacon_test": "Balise 406 test",
+            "elt121": "Sirène 121,5 MHz", "pocsag": "Messages POCSAG surveillés",
         }
         for i, (k, t) in enumerate(labels.items()):
             v = tk.BooleanVar(value=True)
@@ -5202,7 +5218,7 @@ class App(SaterMixin, tk.Tk):
         btns.pack(anchor="w")
         tk.Label(btns, text="Donner la clé à :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left", padx=(0, 10))
         self.sdr_mode_buttons = {}
-        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "433", "openwebrx"):
+        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "pocsag", "433", "openwebrx"):
             b = tk.Button(
                 btns, text=SDR_MODE_LABELS[mode], font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
                 bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT, activeforeground="#1a1200",
@@ -5242,7 +5258,7 @@ class App(SaterMixin, tk.Tk):
                 font=theme.FONT_BODY, highlightthickness=0, command=self._sdr_sched_show,
             ).pack(side="left", padx=(0, 16))
 
-        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "433", "openwebrx")]
+        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "pocsag", "433", "openwebrx")]
         self._sdr_label_to_mode = {v: k for k, v in SDR_MODE_LABELS.items()}
 
         editors = tk.Frame(plan, bg=theme.BG_CARD)

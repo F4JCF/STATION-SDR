@@ -257,3 +257,15 @@ Au premier lancement, un raccourci « STATION-SDR » est ajouté au menu des
 applications. Réglages dans `~/.config/STATION-SDR`. La mise à jour
 automatique remplace le fichier sur place. Son des alertes et des
 enregistrements : `paplay` (PulseAudio / PipeWire) ou `aplay`.
+
+## POCSAG (radiomessagerie)
+
+```
+curl -fsSL https://raw.githubusercontent.com/F4JCF/STATION-SDR/main/raspberry/install_pocsag.sh | sudo bash
+```
+
+Installe multimon-ng et le service POCSAG (port 5012) : écoute FM par rtl_fm,
+décodage POCSAG 512 / 1200 / 2400 bauds. Fréquence par défaut : DAPNET
+439,9875 MHz (radiomessagerie radioamateur). Alerte (appli et téléphone)
+quand un message contient l'indicatif ou un mot surveillé. Les messages
+restent en mémoire sur le Pi.

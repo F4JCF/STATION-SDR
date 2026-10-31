@@ -1,0 +1,14 @@
+[Unit]
+Description=Reception POCSAG (multimon-ng, ecoute seule)
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=POCSAG_PORT=5012
+ExecStart=/usr/bin/python3 /usr/local/bin/pocsag_api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

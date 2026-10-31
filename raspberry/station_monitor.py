@@ -51,7 +51,7 @@ DEFAULT_CONFIG = {
               "user": "", "password": "", "to": ""},
     "events": {"squawk": True, "sart": True, "aprs_msg": True, "winlink": True,
                "undervoltage": True, "dongle": True, "vigilance": True, "beacon": True, "beacon_test": True,
-               "elt121": True},
+               "elt121": True, "pocsag": True},
     # Vigilance Météo-France : clé gratuite à créer sur portail-api.meteofrance.fr
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
@@ -68,6 +68,7 @@ EVENT_LABELS = {
     "beacon": "Balise de détresse 406 MHz (émission réelle)",
     "beacon_test": "Balise 406 MHz en mode test / exercice",
     "elt121": "Sirène de balise sur 121,5 MHz",
+    "pocsag": "Message POCSAG surveillé (indicatif ou mot-clé)",
 }
 VIGI_URL = "https://public-api.meteofrance.fr/public/DPVigilance/v1/cartevigilance/encours"
 VIGI_PHENOMENA = {
@@ -410,6 +411,13 @@ def collect_once(state: dict) -> None:
                    f"{e.get('sweeps_per_s')} balayages/s.\nEnregistrement disponible dans l'appli "
                    "(Balises de détresse → 121,5 MHz).", 4, "elt121")
 
+    pmsgs = fetch_json("http://127.0.0.1:5012/api/pocsag/messages?limit=50") or []
+    for m in pmsgs if isinstance(pmsgs, list) else []:
+        if m.get("watch") and time.time() - (m.get("time") or 0) < 900 \
+                and event_once(f"pocsag:{m.get('ric')}:{m.get('text', '')[:60]}", 3600):
+            notify(f"POCSAG — message pour RIC {m.get('ric')}",
+                   f"{m.get('text') or '(tonalité)'}\n{m.get('freq_mhz')} MHz, {m.get('rate')} bauds", 4, "pocsag")
+
     if th.get("under_voltage_now") and event_once("undervolt", 6 * 3600):
         notify("Pi en sous-tension", "Le Raspberry Pi manque de courant : la clé SDR risque de décrocher.\n"
                "Remède : hub USB alimenté et/ou alimentation 5,1 V / 2,5 A.", 4, "undervoltage")
@@ -517,7 +525,7 @@ def vigilance_loop() -> None:
 
 REPORT_STATE = os.path.join(os.path.dirname(DB_PATH), "report_last")
 MODE_NAMES = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "iss": "APRS ISS", "beacon": "Balise 406",
-              "433": "433 MHz", "elt121": "Balise 121,5", "openwebrx": "OpenWebRX", "off": "arrêtée"}
+              "433": "433 MHz", "elt121": "Balise 121,5", "pocsag": "POCSAG", "openwebrx": "OpenWebRX", "off": "arrêtée"}
 
 
 def build_report(hours: int = 24) -> tuple:
@@ -693,7 +701,7 @@ button:disabled{opacity:.5}
 <div class="card"><div class="lbl">Vigilance Météo-France</div><div id="vigi" class="muted">—</div></div>
 <div class="card"><div class="lbl">Dernières alertes</div><div id="alerts" class="muted">—</div></div>
 <script>
-const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",elt121:"121,5 MHz","433":"433 MHz",iss:"APRS ISS",off:"Arrêtée"};
+const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",elt121:"121,5 MHz",pocsag:"POCSAG","433":"433 MHz",iss:"APRS ISS",off:"Arrêtée"};
 const VC={1:["#3fb950","VERT"],2:["#eab308","JAUNE"],3:["#f97316","ORANGE"],4:["#f85149","ROUGE"]};
 let busy=false;
 function tile(l,v,c,s){return `<div class="tile"><div class="lbl">${l}</div><div class="big ${c||""}">${v}</div>${s?`<div class="muted" style="font-size:12px">${s}</div>`:""}</div>`}
@@ -711,7 +719,7 @@ function render(d){
   document.getElementById("mode").innerHTML=m.mode==="off"?'<span class="red">Arrêtée</span>':`<span style="color:var(--accent)">${L[m.mode]||"—"}</span>`;
   const sched={manual:"manuel",rotation:"rotation",planning:"planning horaire"}[(m.schedule||{}).type]||"—";
   document.getElementById("modeinfo").textContent=m.mode==="off"?"tous les modules sont arrêtés":"partage : "+sched;
-  let b="";for(const k of ["adsb","ais","aprs","iss","beacon","elt121","433","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
+  let b="";for(const k of ["adsb","ais","aprs","iss","beacon","elt121","pocsag","433","openwebrx"]){const ok=((m.units||{})[k]||[]).length;
     b+=`<button class="${k===m.mode?"on":""}" ${(!ok||busy)?"disabled":""} onclick="setMode('${k}')">${L[k]}</button>`}
   b+=`<button class="stop" ${(m.mode==="off"||busy)?"disabled":""} onclick="setMode('off')">■ Arrêter</button>`;
   document.getElementById("btns").innerHTML=b;
@@ -837,7 +845,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, public_config(update_config(data if isinstance(data, dict) else {})))
         elif path.startswith("/api/dash/sdr/"):
             mode = path.rsplit("/", 1)[-1]
-            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "elt121", "433", "iss", "off"):
+            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "elt121", "pocsag", "433", "iss", "off"):
                 self._send(400, {"error": "module inconnu"})
                 return
             try:

@@ -283,3 +283,22 @@ def get_adsb_stats(host: str, port: int) -> dict:
     resp = requests.get(f"http://{host}:{port}/api/adsb/stats", timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_pocsag(host: str, port: int, what: str, **params):
+    """Service pocsag : status ou messages."""
+    resp = requests.get(f"http://{host}:{port}/api/pocsag/{what}", params=params or None, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def set_pocsag_config(host: str, port: int, **conf) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/pocsag/config", json=conf, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def pocsag_clear(host: str, port: int) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/pocsag/clear", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()

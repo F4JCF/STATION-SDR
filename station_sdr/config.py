@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
     "lora_igate_host": "192.168.1.154",
     "port_433": 5010,
     "port_elt121": 5011,
+    "port_pocsag": 5012,
     "port_openwebrx": 8073,
     "refresh_seconds": 15,
     "check_updates": True,
