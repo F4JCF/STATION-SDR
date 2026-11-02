@@ -35,7 +35,7 @@ from tkintermapview import TkinterMapView
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.LANCZOS
 
-from . import api_client, skin, theme, updater
+from . import api_client, theme, updater
 from .config import load_config, save_config
 from .version import __version__
 from .aircraft_db import RouteCache, TarDb
@@ -626,70 +626,34 @@ class _Gauge(tk.Canvas):
         self.value, self.subtitle = value, subtitle
         self._draw()
 
-    def _frac(self, v):
-        """Position (0..1) de la valeur sur l'échelle de couleur, calée sur
-        les seuils : vert jusqu'à `warn`, orange jusqu'à `crit`, puis rouge."""
-        if v < self.warn:
-            return 0.62 * (v - self.vmin) / max(1e-9, self.warn - self.vmin)
-        if v < self.crit:
-            return 0.62 + 0.24 * (v - self.warn) / max(1e-9, self.crit - self.warn)
-        return 0.86 + 0.14 * (v - self.crit) / max(1e-9, self.vmax - self.crit)
-
     def _draw(self):
         self.delete("all")
-        cx, cy = self.w / 2, self.h - 42
-        r = min(self.w / 2 - 16, self.h - 66)
+        cx, cy = self.w / 2, self.h - 40
+        r = min(self.w / 2 - 14, self.h - 66)
         box = (cx - r, cy - r, cx + r, cy + r)
-        self.create_text(cx, 11, text=self.title, fill=theme.TEXT, font=("Segoe UI", 10, "bold"))
-        steps = 48  # arc en dégradé vert → jaune → orange → rouge
-        for i in range(steps):
-            v0 = self.vmin + (self.vmax - self.vmin) * i / steps
-            v1 = self.vmin + (self.vmax - self.vmin) * (i + 1) / steps
-            a0, a1 = self._angle(v0), self._angle(v1)
-            col = skin.gauge_color(self._frac((v0 + v1) / 2))
-            self.create_arc(*box, start=a1, extent=a0 - a1 + 0.6, style="arc", outline=col, width=13)
+        self.create_text(cx, 10, text=self.title, fill=theme.MUTED, font=("Segoe UI", 9, "bold"))
+        zones = ((self.vmin, self.warn, theme.GREEN), (self.warn, self.crit, theme.ORANGE), (self.crit, self.vmax, theme.RED))
+        for lo, hi, col in zones:
+            a0, a1 = self._angle(lo), self._angle(hi)
+            self.create_arc(*box, start=a1, extent=a0 - a1, style="arc", outline=col, width=10)
         for i in range(11):  # graduations
             v = self.vmin + (self.vmax - self.vmin) * i / 10
             ang = math.radians(self._angle(v))
-            r1, r2 = r - 10, r - (20 if i % 5 == 0 else 15)
+            r1, r2 = r - 9, r - (17 if i % 5 == 0 else 13)
             self.create_line(cx + r1 * math.cos(ang), cy - r1 * math.sin(ang),
-                             cx + r2 * math.cos(ang), cy - r2 * math.sin(ang), fill=theme.SUBTEXT)
+                             cx + r2 * math.cos(ang), cy - r2 * math.sin(ang), fill=theme.MUTED)
         if self.value is None:
             txt, col = "—", theme.MUTED
         else:
             ang = math.radians(self._angle(self.value))
-            tip = (cx + (r - 14) * math.cos(ang), cy - (r - 14) * math.sin(ang))
-            self.create_line(cx, cy, *tip, fill=theme.BORDER, width=6, capstyle="round")  # halo
-            self.create_line(cx, cy, *tip, fill="#ffffff", width=3, capstyle="round")
+            self.create_line(cx, cy, cx + (r - 14) * math.cos(ang), cy - (r - 14) * math.sin(ang),
+                             fill=theme.TEXT, width=3, capstyle="round")
             col = theme.RED if self.value >= self.crit else theme.ORANGE if self.value >= self.warn else theme.GREEN
             txt = f"{self.value:.0f} {self.unit}"
-        self.create_oval(cx - 7, cy - 7, cx + 7, cy + 7, fill="#ffffff", outline=theme.BORDER, width=2)
-        self.create_text(cx, cy + 18, text=txt, fill=col, font=("Segoe UI", 16, "bold"))
+        self.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=theme.TEXT, outline="")
+        self.create_text(cx, cy + 15, text=txt, fill=col, font=("Segoe UI", 13, "bold"))
         if self.subtitle:
-            self.create_text(cx, cy + 36, text=self.subtitle, fill=theme.SUBTEXT, font=("Segoe UI", 9))
-
-
-_JOURS = ("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
-_MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
-         "septembre", "octobre", "novembre", "décembre")
-
-
-class _CanvasText:
-    """Texte d'un canevas qui se pilote comme un Label (`config(text=…)`)."""
-
-    def __init__(self, canvas, item):
-        self.canvas, self.item = canvas, item
-
-    def config(self, text=None, fg=None, **_kw):
-        opts = {}
-        if text is not None:
-            opts["text"] = text
-        if fg is not None:
-            opts["fill"] = fg
-        if opts:
-            self.canvas.itemconfig(self.item, **opts)
-
-    configure = config
+            self.create_text(cx, cy + 31, text=self.subtitle, fill=theme.MUTED, font=("Segoe UI", 8))
 
 
 class _TileChip:
@@ -719,25 +683,24 @@ class _TileChip:
             mode = "elt121"  # la vignette Balises couvre aussi le 121,5 MHz
         if self.key == "aprs" and mode and current and mode != current:
             # le LoRa (iGate) fonctionne sans la clé SDR : seule la VHF est en pause
-            self.label.config(text=f" {self.text} · VHF en pause ", fg=theme.CHIP_FG, bg=theme.CHIP_BG)
-            theme.set_border(self.frame, theme.BORDER)
+            self.label.config(text=f" {self.text} · VHF en pause ", fg=theme.TEXT, bg=theme.BG_CARD_ALT)
+            self.frame.config(bg=theme.BORDER)
         elif mode and current and mode != current:
             self.label.config(
                 text=(" En pause · clé SDR arrêtée " if current == "off"
-                      else f" En pause · clé sur {SDR_MODE_LABELS.get(current, current)} "), fg="#cfdcff",
-                bg=theme.CHIP_BG,
+                      else f" En pause · clé sur {SDR_MODE_LABELS.get(current, current)} "), fg=theme.MUTED,
+                bg=theme.BG_CARD_ALT,
             )
-            theme.set_border(self.frame, theme.BORDER)
+            self.frame.config(bg=theme.BORDER)
         elif self.key == "alerts" and str(self.text).startswith("⚠"):
             self.label.config(text=f" {self.text} ", fg="#0b0f17", bg=theme.RED)
-            theme.set_border(self.frame, theme.RED)
+            self.frame.config(bg=theme.RED)
         elif mode and current == mode:
-            self.label.config(text=f" ✈ {self.text} " if self.key == "aircraft" else f" ● {self.text} ",
-                              fg="#1a1200", bg=theme.ACCENT)
-            theme.set_border(self.frame, theme.ACCENT)
+            self.label.config(text=f" ● {self.text} ", fg="#1a1200", bg=theme.ACCENT)
+            self.frame.config(bg=theme.ACCENT)
         else:
-            self.label.config(text=f" {self.text} ", fg=theme.CHIP_FG, bg=theme.CHIP_BG)
-            theme.set_border(self.frame, theme.BORDER)
+            self.label.config(text=f" {self.text} ", fg=theme.TEXT, bg=theme.BG_CARD_ALT)
+            self.frame.config(bg=theme.BORDER)
 
 
 class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, tk.Tk):
@@ -781,7 +744,6 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self._alert_init()
         self._build_menu()
         self._build_header()
-        self._build_footer()
         self._build_body()
         self._tick_clock()
 
@@ -985,18 +947,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         self.config(menu=menubar)
 
-    HEADER_H = 150
-
     def _build_header(self):
-        """Bandeau « spatial » : ciel étoilé, horizon, spectre, logo,
-        titre et horloge, dessiné sur un canevas redimensionnable."""
-        self.header_canvas = tk.Canvas(self, height=self.HEADER_H, bg=theme.BG, highlightthickness=0, bd=0)
-        self.header_canvas.pack(fill="x")
-        c = self.header_canvas
+        header = tk.Frame(self, bg=theme.BG)
+        header.pack(fill="x", padx=20, pady=(16, 8))
 
-        self._header_bg_item = c.create_image(0, 0, anchor="nw")
         self._header_logo_image = None
-        logo_size = self.HEADER_H - 34
         try:
             try:
                 # L'icône de l'exe contient le même logo en 256 px : on la
@@ -1006,74 +961,37 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 logo_img = ico.convert("RGBA")
             except Exception:
                 logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
-            logo_img = logo_img.resize((256, 256), Image.LANCZOS)
-            # Le logo est rond : on masque les coins pour qu'il se détache
-            # proprement sur le ciel étoilé.
-            mask = Image.new("L", (1024, 1024), 0)
-            ImageDraw.Draw(mask).ellipse([8, 8, 1015, 1015], fill=255)
-            mask = mask.resize((256, 256), Image.LANCZOS)
-            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (256, 256), 0), mask)
+            logo_img = logo_img.resize((190, 190), Image.LANCZOS)
+            # Le logo est rond : on masque les coins (blancs) pour qu'il se
+            # détache proprement sur le fond sombre.
+            mask = Image.new("L", (560, 560), 0)
+            ImageDraw.Draw(mask).ellipse([4, 4, 555, 555], fill=255)
+            mask = mask.resize((190, 190), Image.LANCZOS)
+            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (190, 190), 0), mask)
             logo_img.putalpha(alpha)
-            self._header_logo_image = ImageTk.PhotoImage(skin.logo_with_glow(logo_img, logo_size))
-            c.create_image(4, self.HEADER_H / 2 - 2, image=self._header_logo_image, anchor="w")
+            self._header_logo_image = ImageTk.PhotoImage(logo_img)
+            tk.Label(header, image=self._header_logo_image, bg=theme.BG).pack(side="left", padx=(0, 14))
         except Exception:
             pass  # logo absent/illisible : l'en-tête reste utilisable sans lui
 
-        tx = logo_size + 48 if self._header_logo_image else 24
-        ty = self.HEADER_H * 0.40
-        for dx, dy, col in ((3, 3, "#000814"),):  # ombre portée
-            c.create_text(tx + dx, ty + dy, text="STATION-", anchor="w", fill=col, font=theme.FONT_HERO,
-                          tags="t_shadow1")
-        t1 = c.create_text(tx, ty, text="STATION-", anchor="w", fill="#ffffff", font=theme.FONT_HERO)
-        x_sdr = c.bbox(t1)[2] - 4
-        c.create_text(x_sdr + 3, ty + 3, text="SDR", anchor="w", fill="#000814", font=theme.FONT_HERO)
-        c.create_text(x_sdr, ty, text="SDR", anchor="w", fill=theme.CYAN, font=theme.FONT_HERO)
-        c.create_text(tx + 2, ty + 38, anchor="w", fill="#ffffff", font=("Segoe UI", 13, "bold"),
-                      text="Supervision F4JCF-SDR-STATION — ADS-B · Météo · APRS · SDR")
+        left = tk.Frame(header, bg=theme.BG)
+        left.pack(side="left", fill="y")
+        tk.Label(left, text="STATION-SDR", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_TITLE).pack(anchor="w")
+        tk.Label(
+            left, text="Supervision F4JCF-SDR-STATION — ADS-B · Météo · APRS · SDR",
+            bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+        ).pack(anchor="w")
 
-        self.clock_label = _CanvasText(c, c.create_text(0, 0, text="--:--:--", fill="#ffffff", font=theme.FONT_CLOCK))
-        self.date_label = _CanvasText(c, c.create_text(0, 0, text="", fill=theme.CYAN, font=("Segoe UI", 13, "bold")))
-        self._header_w = 0
-        c.bind("<Configure>", self._on_header_resize)
-
-    def _on_header_resize(self, event):
-        if abs(event.width - self._header_w) < 4:
-            return
-        self._header_w = event.width
-        if getattr(self, "_header_job", None):
-            self.after_cancel(self._header_job)
-        self._header_job = self.after(80, self._redraw_header)
-
-    def _redraw_header(self):
-        self._header_job = None
-        c, w, h = self.header_canvas, max(400, self._header_w), self.HEADER_H
-        bw, bh = 290, 100
-        box = (w - bw - 18, (h - bh) / 2 - 2, w - 18, (h + bh) / 2 - 2)
-        self._header_bg = ImageTk.PhotoImage(skin.header_image(w, h, box))
-        c.itemconfig(self._header_bg_item, image=self._header_bg)
-        cx = (box[0] + box[2]) / 2
-        c.coords(self.clock_label.item, cx, box[1] + 40)
-        c.coords(self.date_label.item, cx, box[1] + 78)
-        c.tag_lower(self._header_bg_item)
-
-    def _build_footer(self):
-        """Paysage en pied de page (montagnes, ville, pylône) — accueil seul."""
-        self.footer_canvas = tk.Canvas(self, height=48, bg=theme.BG, highlightthickness=0, bd=0)
-        self._footer_item = self.footer_canvas.create_image(0, 0, anchor="nw")
-        self._footer_w = 0
-
-        def on_resize(e):
-            if abs(e.width - self._footer_w) < 4:
-                return
-            self._footer_w = e.width
-            self._footer_img = ImageTk.PhotoImage(skin.footer_image(e.width, 48))
-            self.footer_canvas.itemconfig(self._footer_item, image=self._footer_img)
-
-        self.footer_canvas.bind("<Configure>", on_resize)
+        right = tk.Frame(header, bg=theme.BG)
+        right.pack(side="right", fill="y")
+        self.clock_label = tk.Label(right, text="--:--:--", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_TITLE)
+        self.clock_label.pack(anchor="e")
+        self.date_label = tk.Label(right, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.date_label.pack(anchor="e")
 
         # Puces de statut global
         strip = tk.Frame(self, bg=theme.BG)
-        strip.pack(fill="x", padx=20, pady=(10, 8))
+        strip.pack(fill="x", padx=20, pady=(0, 10))
 
         self.chip_host = theme.chip(strip, f"Hôte {self.config_data.get('pi_host', '?')}")
         self.chip_host.pack(side="left", padx=(0, 8))
@@ -1099,8 +1017,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
     def _build_body(self):
         container = tk.Frame(self, bg=theme.BG)
-        container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
-        self.body_container = container
+        container.pack(fill="both", expand=True, padx=20, pady=(0, 16))
 
         nav = tk.Frame(container, bg=theme.BG)
         nav.pack(fill="x", pady=(0, 10))
@@ -1162,30 +1079,30 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         )
         for i, (key, title, unit, lo, hi, warn, crit) in enumerate(specs):
             row.grid_columnconfigure(i, weight=1)
-            g = _Gauge(row, title, unit, lo, hi, warn, crit, width=230, height=160)
+            g = _Gauge(row, title, unit, lo, hi, warn, crit)
             g.grid(row=0, column=i, padx=6)
             self.home_gauges[key] = g
         # Voyant d'alimentation + infos
         power = tk.Frame(row, bg=theme.BG_CARD)
         power.grid(row=0, column=len(specs), padx=(16, 6), sticky="nsew")
         row.grid_columnconfigure(len(specs), weight=1)
-        tk.Label(power, text="⚡ ALIMENTATION", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(2, 6))
+        tk.Label(power, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(2, 6))
         led_row = tk.Frame(power, bg=theme.BG_CARD)
         led_row.pack(anchor="w")
         self.home_power_led = tk.Canvas(led_row, width=34, height=34, bg=theme.BG_CARD, highlightthickness=0)
         self.home_power_led.pack(side="left")
         self._home_led_item = self.home_power_led.create_oval(3, 3, 31, 31, fill=theme.MUTED, outline="")
-        self.home_power_text = tk.Label(led_row, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 15, "bold"))
+        self.home_power_text = tk.Label(led_row, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 13, "bold"))
         self.home_power_text.pack(side="left", padx=(10, 0))
-        self.home_power_sub = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.SUBTEXT, font=theme.FONT_SUBTITLE, justify="left")
+        self.home_power_sub = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
         self.home_power_sub.pack(anchor="w", pady=(8, 0))
-        self.home_uptime = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.SUBTEXT, font=theme.FONT_SUBTITLE, justify="left")
+        self.home_uptime = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
         self.home_uptime.pack(anchor="w", pady=(2, 0))
         # Bouton d'arrêt / relance de la clé SDR, directement sur l'accueil
         key_col = tk.Frame(row, bg=theme.BG_CARD)
         key_col.grid(row=0, column=len(specs) + 1, padx=(10, 6), sticky="ns")
-        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(2, 6))
-        self.home_key_label = tk.Label(key_col, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 16, "bold"))
+        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(2, 6))
+        self.home_key_label = tk.Label(key_col, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 13, "bold"))
         self.home_key_label.pack(anchor="w")
         self.home_key_button = tk.Button(
             key_col, text="■  Arrêter la clé SDR", font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
@@ -1265,7 +1182,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             parts.append(f"en marche depuis {d} j {rem // 3600} h" if d else f"en marche depuis {rem // 3600} h {rem % 3600 // 60:02d} min")
         if n is not None:
             parts.append(f"{n} clé(s) SDR sur l'USB")
-        self.home_uptime.config(text="  ·  ".join(parts), fg=theme.RED if n == 0 else theme.SUBTEXT)
+        self.home_uptime.config(text="  ·  ".join(parts), fg=theme.RED if n == 0 else theme.MUTED)
 
     def _build_home_tiles(self):
         self._build_home_gauges()
@@ -1286,16 +1203,16 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
             header_row = tk.Frame(inner, bg=theme.BG_CARD)
             header_row.pack(anchor="w", fill="x")
-            icon_image = _tile_icon(key, size=34)
+            icon_image = _tile_icon(key, size=30)
             icon_label = tk.Label(header_row, image=icon_image, bg=theme.BG_CARD)
             icon_label.image = icon_image  # garde une référence (sinon Tk l'efface du GC)
             icon_label.pack(side="left", padx=(0, 10))
             title_label = tk.Label(
-                header_row, text=title, bg=theme.BG_CARD, fg="#ffffff", font=theme.FONT_TILE,
+                header_row, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION,
             )
             title_label.pack(side="left")
             subtitle_label = tk.Label(
-                inner, text=subtitle, bg=theme.BG_CARD, fg=theme.SUBTEXT, font=theme.FONT_SUBTITLE,
+                inner, text=subtitle, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                 wraplength=225, justify="left",
             )
             subtitle_label.pack(anchor="w", pady=(2, 6))
@@ -1407,12 +1324,10 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             page.pack_forget()
 
         if key is None:
-            self.footer_canvas.pack(side="bottom", fill="x", before=self.body_container)
             self.home_frame.pack(fill="both", expand=True)
             self.view_title_label.config(text="Accueil")
             self.back_button.pack_forget()
         else:
-            self.footer_canvas.pack_forget()
             self.pages[key].pack(fill="both", expand=True)
             titles = {k: t for k, t, _ in HOME_TILES}
             self.view_title_label.config(text=titles.get(key, key))
@@ -1462,7 +1377,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
     def _tick_clock(self):
         now = time.localtime()
         self.clock_label.config(text=time.strftime("%H:%M:%S", now))
-        self.date_label.config(text=f"{_JOURS[now.tm_wday]} {now.tm_mday:02d} {_MOIS[now.tm_mon - 1]} {now.tm_year}")
+        self.date_label.config(text=time.strftime("%A %d %B %Y", now))
         self.after(1000, self._tick_clock)
 
     # ------------------------------------------------------------ Réseau --
