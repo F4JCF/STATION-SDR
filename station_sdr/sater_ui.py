@@ -349,7 +349,7 @@ class SaterMixin:
             fg=theme.ORANGE if err else theme.MUTED)
         if st.get("active"):
             since = time.time() - (st.get("active_since") or time.time())
-            self.elt_state.config(text=(f"🆘  SIRÈNE {'D’EXERCICE ' if exo else ''}DÉTECTÉE sur {freq_txt(fq)} MHz "
+            self.elt_state.config(text=(f"⚠  SIRÈNE {'D’EXERCICE ' if exo else ''}DÉTECTÉE sur {freq_txt(fq)} MHz "
                                         f"depuis {int(since // 60)} min {int(since % 60):02d} s"),
                                   bg=theme.ORANGE if exo else theme.RED, fg="#0b0f17")
         else:
@@ -608,7 +608,7 @@ class SaterMixin:
         tk.Label(r1, text="Position :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY).pack(side="left")
         self.g_pos = tk.StringVar()
         ttk.Entry(r1, textvariable=self.g_pos, width=24).pack(side="left", padx=4)
-        self.g_click_btn = ttk.Button(r1, text="📍 Sur la carte", style="Flat.TButton", command=self._gonio_click_mode)
+        self.g_click_btn = ttk.Button(r1, text="⊕ Sur la carte", style="Flat.TButton", command=self._gonio_click_mode)
         self.g_click_btn.pack(side="left", padx=4)
         ttk.Button(r1, text="Ma station", style="Flat.TButton",
                    command=lambda: self.g_pos.set("{:.5f}, {:.5f}".format(*self._station_coords()))).pack(side="left")
@@ -734,7 +734,7 @@ class SaterMixin:
 
     def _gonio_click_mode(self):
         self._gonio_click = not self._gonio_click
-        self.g_click_btn.config(text="Cliquez sur la carte…" if self._gonio_click else "📍 Sur la carte")
+        self.g_click_btn.config(text="Cliquez sur la carte…" if self._gonio_click else "⊕ Sur la carte")
         try:
             self.g_map.canvas.config(cursor="crosshair" if self._gonio_click else "")
         except Exception:
