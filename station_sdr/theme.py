@@ -3,20 +3,30 @@
 import tkinter as tk
 from tkinter import ttk
 
-BG = "#0b0f17"
-BG_CARD = "#141b26"
-BG_CARD_ALT = "#1b2433"
-BORDER = "#23304a"
-ACCENT = "#ff7a1a"
+# Thème « spatial » : bleu nuit profond, cartes bleutées à liseré lumineux,
+# accent orange pour le module qui détient la clé SDR.
+BG = "#040b1d"
+BG_CARD = "#0a1838"
+BG_CARD_ALT = "#10224d"
+BORDER = "#2f6fe8"
+GLOW = "#12306e"
+ACCENT = "#ff8a1f"
 ACCENT_DIM = "#8a4a1f"
-TEXT = "#e6edf3"
-MUTED = "#8b96a5"
-GREEN = "#3fb950"
-RED = "#f85149"
-ORANGE = "#d29922"
+TEXT = "#eef4ff"
+MUTED = "#a9bbdd"
+SUBTEXT = "#d3def5"
+CYAN = "#29c4ff"
+CHIP_BG = "#1c57d6"
+CHIP_FG = "#ffffff"
+GREEN = "#3fdc5a"
+RED = "#f5433d"
+ORANGE = "#ffb020"
 BLUE = "#4aa3ff"
 
 FONT_TITLE = ("Segoe UI", 18, "bold")
+FONT_HERO = ("Segoe UI", 34, "bold italic")
+FONT_CLOCK = ("Segoe UI", 34, "bold")
+FONT_TILE = ("Segoe UI", 13, "bold")
 FONT_SUBTITLE = ("Segoe UI", 10)
 FONT_SECTION = ("Segoe UI", 12, "bold")
 FONT_BODY = ("Segoe UI", 10)
@@ -47,7 +57,7 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
     )
     style.configure(
         "TNotebook.Tab",
-        background=BG_CARD, foreground=MUTED,
+        background=BG_CARD_ALT, foreground=SUBTEXT,
         padding=(16, 8), font=FONT_BODY_BOLD, borderwidth=0,
     )
     style.map(
@@ -90,13 +100,33 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
     return style
 
 
-def card(parent, **kwargs) -> ttk.Frame:
-    """Un conteneur avec le fond 'carte' et un léger liseré."""
-    outer = tk.Frame(parent, bg=BORDER, **kwargs)
-    inner = ttk.Frame(outer, style="Card.TFrame")
+def _mix(c1: str, c2: str, t: float) -> str:
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def card(parent, **kwargs) -> tk.Frame:
+    """Un conteneur « carte » avec un double liseré qui imite un halo
+    lumineux : anneau extérieur sombre, filet intérieur bleu vif."""
+    outer = tk.Frame(parent, bg=GLOW, **kwargs)
+    mid = tk.Frame(outer, bg=BORDER)
+    mid.pack(fill="both", expand=True, padx=1, pady=1)
+    inner = ttk.Frame(mid, style="Card.TFrame")
     inner.pack(fill="both", expand=True, padx=1, pady=1)
+    outer.mid = mid
     outer.inner = inner
     return outer
+
+
+def set_border(frame, color: str) -> None:
+    """Change la couleur du liseré d'une carte (et de son halo)."""
+    mid = getattr(frame, "mid", None)
+    if mid is None:
+        frame.config(bg=color)
+        return
+    mid.config(bg=color)
+    frame.config(bg=GLOW if color == BORDER else _mix(color, BG, 0.55))
 
 
 def status_dot(parent, color: str, size: int = 10) -> tk.Canvas:
@@ -115,6 +145,6 @@ def pill(parent, text: str, color: str) -> tk.Label:
 
 def chip(parent, text: str) -> tk.Label:
     return tk.Label(
-        parent, text=f" {text} ", bg=BG_CARD_ALT, fg=TEXT,
-        font=FONT_SUBTITLE, padx=6, pady=3,
+        parent, text=f" {text} ", bg=CHIP_BG, fg=CHIP_FG,
+        font=FONT_CHIP, padx=8, pady=4,
     )
