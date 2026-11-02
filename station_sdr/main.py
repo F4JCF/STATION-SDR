@@ -1682,11 +1682,18 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.adsb_rx_label.pack(fill="x", padx=12, pady=(0, 4))
         search_row = tk.Frame(wrapper, bg=theme.BG)
         search_row.pack(fill="x", padx=12, pady=(0, 4))
-        tk.Label(search_row, text="Rechercher (indicatif, hex, immat., type) :", bg=theme.BG, fg=theme.MUTED,
+        tk.Label(search_row, text="Rechercher :", bg=theme.BG, fg=theme.MUTED,
                  font=theme.FONT_SUBTITLE).pack(side="left", padx=(0, 6))
         self.aircraft_search_var = tk.StringVar()
         self.aircraft_search_var.trace_add("write", lambda *_a: self._repaint_aircraft())
         ttk.Entry(search_row, textvariable=self.aircraft_search_var, width=18).pack(side="left")
+        self.ac_mil_only = tk.BooleanVar(value=False)
+        self.ac_mil_notify = tk.BooleanVar(value=self.config_data.get("notify_military", False))
+        for var, txt, cmd in ((self.ac_mil_only, "★ Militaires seuls", lambda: self._repaint_aircraft()),
+                              (self.ac_mil_notify, "Me prévenir", self._ac_mil_notify_save)):
+            tk.Checkbutton(search_row, text=txt, variable=var, command=cmd, bg=theme.BG, fg="#a3b86c",
+                           selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG, activeforeground="#a3b86c",
+                           font=theme.FONT_SUBTITLE, highlightthickness=0).pack(side="left", padx=(10, 0))
         legend = tk.Frame(search_row, bg=theme.BG)
         legend.pack(side="right")
         for txt, col in (("ADS-B", "#4aa3ff"), ("MLAT", "#e3b341"), ("TIS-B", "#f47067"), ("Mode S", "#8b96a5")):
@@ -1711,6 +1718,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.aircraft_tree.tag_configure("tisb", foreground="#f47067")
         self.aircraft_tree.tag_configure("modes", foreground="#8b96a5")
         self.aircraft_tree.tag_configure("emerg", background="#5a1f22", foreground="#ffffff")
+        self.aircraft_tree.tag_configure("mil", background="#2f3a1c", foreground="#d9e8a8")
         vsb = ttk.Scrollbar(table_outer.inner, orient="vertical", command=self.aircraft_tree.yview)
         self.aircraft_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -2184,8 +2192,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         rate = f"  ·  Messages : {self._adsb_msg_rate:.1f}/s" if self._adsb_msg_rate is not None else ""
         self.aircraft_stats_label.config(text=f"Avec position : {with_pos}{rate}")
         self._check_aircraft_alerts(aircraft)
+        n_mil = self._ac_check_military(aircraft)
         if "aircraft" in self.tile_chips:
-            self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)")
+            self.tile_chips["aircraft"].config(text=f"{len(aircraft)} avion(s)" + (f" · {n_mil} militaire(s)" if n_mil else ""))
         self.chip_aircraft.config(text=f"Avions : {len(aircraft)}")
 
         self._repaint_aircraft(keep_selection=True)
@@ -2196,6 +2205,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             return
         query = self.aircraft_search_var.get().strip().lower()
         aircraft = self._last_aircraft_full
+        if getattr(self, "ac_mil_only", None) is not None and self.ac_mil_only.get():
+            aircraft = [ac for ac in aircraft if self._ac_is_mil(ac)]
         if query:
             def match(ac):
                 db = self.tardb.get(ac.get("hex"))
@@ -2250,6 +2261,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             tags = ["mlat"] if src == "mlat" else ["tisb"] if src.startswith("tisb") else ["modes"] if src == "mode_s" else []
             if ac.get("squawk") in self.SQUAWK_ALERTS:
                 tags.append("emerg")
+            elif self._ac_is_mil(ac):
+                tags = ["mil"]
             flag = _flag_image(icao_country(hx)[1])
             tree.insert(
                 "", "end", iid=hx, image=flag or "", tags=tags,
@@ -2287,11 +2300,50 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                     self.aircraft_map.set_path([p0[:2], p1[:2]], color=_alt_color(p1[2]), width=3 if is_sel else 2)
             icon = _plane_icon(ac.get("alt_baro"), ac.get("track"), selected=is_sel)
             self._aircraft_icon_refs.append(icon)
+            mil = self._ac_is_mil(ac)
             label = (ac.get("flight") or "").strip() if is_sel else None
+            if mil:
+                label = "★ " + ((ac.get("flight") or "").strip() or ac.get("r") or self.tardb.get(hx).get("r") or "MIL")
             self._aircraft_markers.append(self.aircraft_map.set_marker(
-                lat, lon, text=label, icon=icon, icon_anchor="center",
+                lat, lon, text=label, icon=icon, icon_anchor="center", text_color="#556b2f" if mil else "#652A22",
                 data=ac, command=self._on_aircraft_marker_click,
             ))
+
+    def _ac_is_mil(self, ac):
+        """Avion militaire d'après la base tar1090 (drapeau « militaire »)."""
+        flags = ac.get("dbFlags")
+        if isinstance(flags, int) and flags & 1:
+            return True
+        return "militaire" in (self.tardb.get(ac.get("hex")).get("flags") or [])
+
+    def _ac_mil_notify_save(self):
+        self.config_data["notify_military"] = bool(self.ac_mil_notify.get())
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+
+    def _ac_check_military(self, aircraft):
+        """Compte les militaires (vignette) et prévient discrètement (notification
+        près de l'horloge, sans fenêtre ni son) à la première apparition."""
+        mil = [ac for ac in aircraft if self._ac_is_mil(ac)]
+        seen = getattr(self, "_mil_seen", {})
+        now = time.time()
+        if self.config_data.get("notify_military", False):
+            for ac in mil:
+                hx = ac.get("hex")
+                if now - seen.get(hx, 0) > 7200:
+                    db = self.tardb.get(hx)
+                    name = (ac.get("flight") or "").strip() or ac.get("r") or db.get("r") or hx.upper()
+                    typ = db.get("long") or ac.get("t") or db.get("t") or "type inconnu"
+                    alt = ac.get("alt_baro")
+                    self._tray_notify(f"Avion militaire : {name}", f"{typ} · {icao_country(hx)[1] or ''}"
+                                      + (f" · {alt:,.0f} ft".replace(",", " ") if isinstance(alt, (int, float)) else ""))
+                    self._mission_log("ADS-B", f"Avion militaire {name} ({typ})")
+        for ac in mil:
+            seen[ac.get("hex")] = now
+        self._mil_seen = seen
+        return len(mil)
 
     # ----------------------------------------------------------- APRS --
 
