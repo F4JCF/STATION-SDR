@@ -767,6 +767,9 @@ class SaterMixin:
         team = self.g_team.get().strip() or "Équipe"
         self._gonio_list().append({"team": team, "lat": lat, "lon": lon, "az_in": az_in, "mag": bool(self.g_mag.get()),
                                    "az": (az_in + decl) % 360, "time": time.time()})
+        if hasattr(self, "_mission_log"):
+            self._mission_log("Goniométrie", f"{team} : azimut {(az_in + decl) % 360:.0f}° depuis "
+                                             f"{lat:.5f}, {lon:.5f}")
         self._gonio_save()
         self.g_az.set("")
         self._gonio_fill()

@@ -53,10 +53,12 @@ CANDIDATES = {
     "elt121": ["elt121"],
     # Radiomessagerie POCSAG (DAPNET 439,9875 MHz par défaut).
     "pocsag": ["pocsag"],
+    # Radiosondes météo (radiosonde_auto_rx en conteneur Docker).
+    "radiosonde": ["docker:radiosonde_auto_rx"],
 }
 
 LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "off": "Arrêtée"}
+          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "off": "Arrêtée"}
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
@@ -375,6 +377,7 @@ LOG_UNITS = {
     "beacon406": "Balises 406 MHz", "rtl433": "Capteurs 433 MHz", "direwolf-iss": "APRS ISS (145,825)",
     "elt121": "Veille 121,5 MHz",
     "pocsag": "POCSAG (multimon-ng)",
+    "docker:radiosonde_auto_rx": "Radiosondes (auto_rx)",
 }
 
 # Fichiers de configuration inclus dans la sauvegarde.
@@ -392,6 +395,7 @@ BACKUP_PATHS = [
     "/var/lib/station-monitor", "/etc/systemd/system/beacon406.service", "/etc/systemd/system/rtl433.service",
     "/etc/systemd/system/elt121.service", "/etc/systemd/system/pocsag.service",
     "/etc/systemd/system/direwolf-iss.service", "/etc/modprobe.d",
+    "/var/lib/sdr-switch/feeds.json", "/var/lib/sdr-switch/feeder-uuid", "/opt/radiosonde/station.cfg",
 ]
 
 
@@ -588,9 +592,8 @@ INSTALLERS = {
     "beacon": ("install_beacon406.sh", "Balises de détresse 406 MHz (dec406)", ["beacon"], None),
     "pocsag": ("install_pocsag.sh", "POCSAG (multimon-ng)", ["pocsag"], None),
     "ais": ("install_ais.sh", "AIS (AIS-catcher)", ["ais"], None),
-    # (à venir) "radiosonde": ("install_radiosonde.sh", "Radiosondes (radiosonde_auto_rx)", ["radiosonde"], None),
+    "radiosonde": ("install_radiosonde.sh", "Radiosondes (radiosonde_auto_rx)", ["radiosonde"], None),
     # (à venir) "meteor": ("install_meteor.sh", "Images satellites Meteor-M", ["meteor"], None),
-    # (à venir) "feeds": ("install_feeds.sh", "Partage ADS-B vers ADS-B Exchange et adsb.lol", [], "/var/lib/sdr-switch/feeds_installed"),
     "protect": ("protect_sd.sh", "Protection de la carte SD et chien de garde", [], "/etc/systemd/journald.conf.d/station-sdr.conf"),
 }
 INSTALL_LOG = os.path.join(STATE_DIR, "install.log")
@@ -662,6 +665,163 @@ def _start_install(module: str, ref: str):
                           "bash", "-c", cmd], capture_output=True, text=True, timeout=30)
     if res.returncode != 0:
         raise RuntimeError(res.stderr.strip() or "systemd-run a échoué")
+
+
+# ------------------------------------------- Partage vers les réseaux --
+#
+# ADS-B : readsb envoie lui-même ses données (« beast_reduce_plus ») aux
+# agrégateurs choisis. AIS : sorties UDP et partage communautaire
+# d'AIS-catcher. APRS : Direwolf en iGate réception seule vers APRS-IS.
+
+FEEDS_FILE = os.path.join(STATE_DIR, "feeds.json")
+UUID_FILE = os.path.join(STATE_DIR, "feeder-uuid")
+ADSB_AGGREGATORS = {
+    "adsbx": ("ADS-B Exchange", "feed1.adsbexchange.com", 30004),
+    "adsblol": ("adsb.lol", "in.adsb.lol", 30004),
+    "airplaneslive": ("airplanes.live", "feed.airplanes.live", 30004),
+}
+FEEDS_DEFAULT = {"adsbx": False, "adsblol": False, "airplaneslive": False, "ais_share": False,
+                 "ais_share_key": "", "ais_udp": [], "aprs_igate": False, "igate_call": "F4JCF-1",
+                 "lat": 43.590541, "lon": 7.002072}
+DW_BEGIN, DW_END = "# --- STATION-SDR iGate (géré par l'appli) ---", "# --- fin STATION-SDR iGate ---"
+
+
+def _feeds_read() -> dict:
+    cfg = dict(FEEDS_DEFAULT)
+    try:
+        with open(FEEDS_FILE, encoding="utf-8") as f:
+            cfg.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return cfg
+
+
+def _feeder_uuid() -> str:
+    try:
+        with open(UUID_FILE, encoding="utf-8") as f:
+            u = f.read().strip()
+            if u:
+                return u
+    except OSError:
+        pass
+    import uuid
+    u = str(uuid.uuid4())
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(UUID_FILE, "w", encoding="utf-8") as f:
+        f.write(u + "\n")
+    return u
+
+
+def aprs_passcode(call: str) -> int:
+    h = 0x73E2
+    for i, c in enumerate(call.split("-")[0].upper()):
+        h ^= ord(c) << (8 if i % 2 == 0 else 0)
+    return h & 0x7FFF
+
+
+def _dm(v: float, pos: str, neg: str, width: int) -> str:
+    h = pos if v >= 0 else neg
+    v = abs(v)
+    d = int(v)
+    return f"{d:0{width}d}^{(v - d) * 60:05.2f}{h}"
+
+
+def _apply_readsb(cfg) -> str:
+    import re as _re
+    path = "/etc/default/readsb"
+    try:
+        txt = open(path, encoding="utf-8").read()
+    except OSError:
+        return "readsb non installé"
+    m = _re.search(r'^NET_OPTIONS="([^"]*)"', txt, _re.M)
+    if not m:
+        return "NET_OPTIONS introuvable dans /etc/default/readsb"
+    opts = m.group(1)
+    hosts = "|".join(_re.escape(h) for _n, h, _p in ADSB_AGGREGATORS.values())
+    opts = _re.sub(rf"\s*--net-connector[ =](?:{hosts}),\S+", "", opts)
+    opts = _re.sub(r"\s*--uuid-file[ =]\S+", "", opts)
+    chosen = [k for k in ADSB_AGGREGATORS if cfg.get(k)]
+    if chosen:
+        _feeder_uuid()
+        opts += f" --uuid-file {UUID_FILE}"
+        for k in chosen:
+            _n, host, port = ADSB_AGGREGATORS[k]
+            opts += f" --net-connector {host},{port},beast_reduce_plus_out"
+    new = txt[:m.start(1)] + opts.strip() + txt[m.end(1):]
+    if new != txt:
+        if not os.path.exists(path + ".avant-partage"):
+            shutil.copy(path, path + ".avant-partage")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new)
+        if _is_active("readsb"):
+            _systemctl("restart", "readsb.service")
+    return "ADS-B : " + (", ".join(ADSB_AGGREGATORS[k][0] for k in chosen) if chosen else "aucun partage")
+
+
+def _apply_ais(cfg) -> str:
+    path = "/etc/AIS-catcher/config.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            conf = json.load(f)
+    except (OSError, ValueError):
+        return "AIS-catcher non installé"
+    udp = []
+    for item in cfg.get("ais_udp") or []:
+        host, _, port = str(item).strip().rpartition(":")
+        if host and port.isdigit():
+            udp.append({"active": True, "host": host, "port": int(port)})
+    if udp:
+        conf["udp"] = udp
+    else:
+        conf.pop("udp", None)
+    conf["sharing"] = bool(cfg.get("ais_share"))
+    if cfg.get("ais_share_key"):
+        conf["sharing_key"] = str(cfg["ais_share_key"]).strip()
+    else:
+        conf.pop("sharing_key", None)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(conf, f, indent=2)
+    for u in UNITS.get("ais", []):
+        if _is_active(u):
+            _start(u)
+    parts = [f"{len(udp)} sortie(s) UDP"] + (["partage aiscatcher.org"] if conf["sharing"] else [])
+    return "AIS : " + ", ".join(parts)
+
+
+def _apply_direwolf(cfg) -> str:
+    path = "/etc/direwolf.conf"
+    try:
+        txt = open(path, encoding="utf-8").read()
+    except OSError:
+        return "Direwolf non installé"
+    if DW_BEGIN in txt:
+        a = txt.index(DW_BEGIN)
+        b = txt.find(DW_END, a)
+        txt = txt[:a].rstrip("\n") + "\n" + (txt[b + len(DW_END):].lstrip("\n") if b >= 0 else "")
+    if cfg.get("aprs_igate"):
+        call = str(cfg.get("igate_call") or "F4JCF-1").upper().strip()
+        lat, lon = float(cfg.get("lat")), float(cfg.get("lon"))
+        block = (f"\n{DW_BEGIN}\n"
+                 f"# iGate réception seule : les trames reçues sont envoyées sur Internet (APRS-IS), rien n'est émis.\n"
+                 f"IGSERVER euro.aprs2.net\n"
+                 f"IGLOGIN {call} {aprs_passcode(call)}\n"
+                 f"# Pas de balise de position : l'indicatif de l'iGate LoRa (F4JCF-10) garde la sienne.\n"
+                 f"# Position de l'iGate VHF : {_dm(lat, 'N', 'S', 2)} {_dm(lon, 'E', 'W', 3)}\n"
+                 f"{DW_END}\n")
+        txt = txt.rstrip("\n") + "\n" + block
+    if not os.path.exists(path + ".avant-partage"):
+        shutil.copy(path, path + ".avant-partage")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(txt)
+    for u in ("direwolf", "direwolf-iss"):
+        if _is_active(u):
+            _systemctl("restart", f"{u}.service")
+    return "APRS : " + (f"iGate réception {cfg.get('igate_call')}" if cfg.get("aprs_igate") else "pas d'iGate")
+
+
+def _apply_feeds(cfg) -> list:
+    with _lock:
+        return [_apply_readsb(cfg), _apply_ais(cfg), _apply_direwolf(cfg)]
 
 
 # ---------------------------------------------- Chien de garde de la clé --
@@ -809,6 +969,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _install_status())
         elif path == "/api/system/modules":
             self._send(200, {"modules": _modules_status(), "install": _install_status()})
+        elif path == "/api/feeds":
+            cfg = _feeds_read()
+            cfg["uuid"] = _feeder_uuid() if any(cfg.get(k) for k in ADSB_AGGREGATORS) else None
+            cfg["aggregators"] = {k: v[0] for k, v in ADSB_AGGREGATORS.items()}
+            self._send(200, cfg)
         elif path == "/api/system/watchdog":
             self._send(200, {"events": list(_watch["events"]), "dongle_present": _dongle_sysfs() is not None})
         elif path == "/api/system/log-units":
@@ -846,6 +1011,38 @@ class Handler(BaseHTTPRequestHandler):
             _update_state.update(running=True, result=None)
             threading.Thread(target=_update_pi, args=(ref,), daemon=True).start()
             self._send(200, {"started": True, "ref": ref})
+            return
+        if path == "/api/feeds":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                data = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, OSError):
+                self._send(400, {"error": "JSON invalide"})
+                return
+            cfg = _feeds_read()
+            for k, default in FEEDS_DEFAULT.items():
+                if k in data:
+                    v = data[k]
+                    cfg[k] = (bool(v) if isinstance(default, bool) else
+                              [str(x)[:80] for x in v][:4] if isinstance(default, list) else
+                              float(v) if isinstance(default, float) else str(v)[:40])
+            import re as _re
+            if not _re.fullmatch(r"[A-Z0-9]{3,7}(-\d{1,2})?", str(cfg["igate_call"]).upper()):
+                self._send(400, {"error": "indicatif d'iGate invalide (ex. F4JCF-1)"})
+                return
+            if str(cfg["igate_call"]).upper() == "F4JCF-10" and cfg.get("aprs_igate"):
+                self._send(400, {"error": "F4JCF-10 est déjà l'iGate LoRa : choisissez un autre SSID (ex. F4JCF-1)"})
+                return
+            os.makedirs(STATE_DIR, exist_ok=True)
+            with open(FEEDS_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            try:
+                result = _apply_feeds(cfg)
+            except Exception as exc:
+                self._send(500, {"error": str(exc)})
+                return
+            self._send(200, {"ok": True, "result": result, "uuid": _feeder_uuid() if any(
+                cfg.get(k) for k in ADSB_AGGREGATORS) else None})
             return
         if path == "/api/system/install":
             from urllib.parse import parse_qs, urlparse

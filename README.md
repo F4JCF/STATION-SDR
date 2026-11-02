@@ -282,3 +282,14 @@ restent en mémoire sur le Pi.
   /tmp en mémoire, chien de garde matériel.
 - `reinstall_station.sh vX.Y.Z sauvegarde.tar.gz` : reconstruit la station sur une
   carte SD neuve puis remet la configuration.
+
+## Partage, radiosondes, missions
+
+- **Partage vers les réseaux** (Santé du Pi) : readsb envoie aux agrégateurs choisis
+  (ADS-B Exchange, adsb.lol, airplanes.live) ; AIS-catcher vers aiscatcher.org et
+  sorties UDP (AISHub, MarineTraffic) ; Direwolf en iGate réception seule (APRS-IS).
+- **Radiosondes** : radiosonde_auto_rx (Project Horus) en conteneur Docker, piloté
+  par la bascule ; la vignette affiche sondes, trajectoires et alerte de descente proche.
+- **Mission / Exercice** : journal horodaté automatique (détections, relèvements,
+  alertes, bascules) et notes ; compte rendu HTML imprimable avec carte, zone
+  probable, relèvements, détections et journal (Documents\STATION-SDR\Missions).

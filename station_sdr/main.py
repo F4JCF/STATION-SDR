@@ -42,7 +42,9 @@ from .aircraft_db import RouteCache, TarDb
 from . import aprs_parse, map_tiles, sat_predict
 from .sater_ui import SaterMixin
 from .pocsag_ui import PocsagMixin
-from .maint_ui import MaintMixin
+from .maint_ui import FeedsMixin, MaintMixin
+from .radiosonde_ui import RadiosondeMixin
+from .mission_ui import MissionMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -99,6 +101,8 @@ HOME_TILES = [
     ("beacon", "Balises de détresse", "406 · 121,5 · 121,375 MHz · goniométrie"),
     ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
     ("pocsag", "POCSAG", "Radiomessagerie · DAPNET 439,9875"),
+    ("radiosonde", "Radiosondes", "Ballons météo · 400–406 MHz"),
+    ("mission", "Mission / Exercice", "Veille, goniométrie, compte rendu"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Clé SDR", "Pilotage et partage automatique"),
@@ -121,9 +125,10 @@ MODULE_SDR_MODE = {
     "beacon": "beacon",
     "s433": "433",
     "pocsag": "pocsag",
+    "radiosonde": "radiosonde",
 }
 SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "off": "arrêtée"}
+                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -387,6 +392,17 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
             d.ellipse([*pt(x - 0.04, 0.72), *pt(x + 0.04, 0.80)], fill=color)
         d.arc([*pt(0.66, 0.02), *pt(0.98, 0.34)], start=270, end=360, fill=color, width=lw)
         d.arc([*pt(0.74, 0.10), *pt(0.90, 0.26)], start=270, end=360, fill=color, width=lw)
+    elif key == "mission":
+        # écusson avec croix (sécurité civile)
+        d.polygon([pt(0.5, 0.04), pt(0.90, 0.18), pt(0.84, 0.62), pt(0.5, 0.94), pt(0.16, 0.62), pt(0.10, 0.18)],
+                  outline=color, width=lw)
+        d.line([pt(0.5, 0.28), pt(0.5, 0.70)], fill=color, width=lw + 1)
+        d.line([pt(0.30, 0.46), pt(0.70, 0.46)], fill=color, width=lw + 1)
+    elif key == "radiosonde":
+        # ballon, fil et sonde
+        d.ellipse([*pt(0.28, 0.04), *pt(0.72, 0.54)], outline=color, width=lw)
+        d.line([pt(0.5, 0.54), pt(0.5, 0.74)], fill=color, width=max(1, lw - 1))
+        d.rectangle([*pt(0.40, 0.74), *pt(0.60, 0.94)], outline=color, width=lw)
     elif key == "sats":
         # satellite : corps + panneaux + orbite
         d.rectangle([*pt(0.42, 0.40), *pt(0.58, 0.60)], outline=color, width=lw)
@@ -679,7 +695,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -1027,6 +1043,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
         self._build_beacon_tab(self.pages["beacon"])
         self._build_s433_tab(self.pages["s433"])
         self._build_pocsag_tab(self.pages["pocsag"])
+        self._build_radiosonde_tab(self.pages["radiosonde"])
+        self._build_mission_tab(self.pages["mission"])
         self._build_sat_tab(self.pages["sats"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
@@ -1276,6 +1294,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
                 self._sdr_mode = mode
                 self.chip_sdr.config(text=f"Clé SDR : {label}")
                 self._refresh_all_tiles()
+                self._mission_log("Clé SDR", f"Clé donnée à {label}")
             else:
                 self.chip_sdr.config(text="Clé SDR : bascule impossible")
                 messagebox.showwarning("Clé SDR", f"Impossible de donner la clé à {label} :\n\n{error}")
@@ -1308,6 +1327,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
         self._current_view = key
         if key == "pocsag":
             self._pocsag_start_poll()
+        if key == "radiosonde":
+            self._rs_start_poll()
         if key == "s433" and not getattr(self, "_s433_poll_running", False):
             self._s433_poll_running = True
             self._s433_poll()
@@ -1383,6 +1404,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
         self._fetch_s433()
         self._elt_fetch_events_bg()
         self._pocsag_fetch_bg()
+        self._rs_fetch_bg()
         self._maybe_refresh_weather_overlay()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
@@ -3257,6 +3279,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
         if last is not None and now - last < cooldown:
             return
         self._alerts.insert(0, {"time": now, "title": title, "text": text})
+        self._mission_log("Alerte", f"{title} — {text.splitlines()[0] if text else ''}")
         del self._alerts[100:]
         self._update_alert_chip()
         if self.config_data.get("alert_sound", True):
@@ -5261,7 +5284,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
         btns.pack(anchor="w")
         tk.Label(btns, text="Donner la clé à :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left", padx=(0, 10))
         self.sdr_mode_buttons = {}
-        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "pocsag", "433", "openwebrx"):
+        for mode in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "pocsag", "radiosonde", "433", "openwebrx"):
             b = tk.Button(
                 btns, text=SDR_MODE_LABELS[mode], font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
                 bg=theme.BG_CARD_ALT, fg=theme.TEXT, activebackground=theme.ACCENT, activeforeground="#1a1200",
@@ -5301,7 +5324,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
                 font=theme.FONT_BODY, highlightthickness=0, command=self._sdr_sched_show,
             ).pack(side="left", padx=(0, 16))
 
-        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "pocsag", "433", "openwebrx")]
+        mode_names = [SDR_MODE_LABELS[m] for m in ("adsb", "ais", "aprs", "iss", "beacon", "elt121", "pocsag", "radiosonde", "433", "openwebrx")]
         self._sdr_label_to_mode = {v: k for k, v in SDR_MODE_LABELS.items()}
 
         editors = tk.Frame(plan, bg=theme.BG_CARD)
@@ -5579,11 +5602,13 @@ class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
         self.health_update_btn = ttk.Button(upd_row, text="Mettre à jour le Pi", style="Accent.TButton",
                                             command=lambda: self._update_pi(ask=True))
         self.health_update_btn.pack(side="left")
-        self.health_version_label = tk.Label(upd_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
-                                             justify="left", wraplength=1100)
-        self.health_version_label.pack(side="left", padx=(10, 0))
         ttk.Button(upd_row, text="Modules du Pi…", style="Accent.TButton",
                    command=self._open_modules_window).pack(side="left", padx=(16, 0))
+        ttk.Button(upd_row, text="Partage vers les réseaux…", style="Accent.TButton",
+                   command=self._open_feeds_window).pack(side="left", padx=(8, 0))
+        self.health_version_label = tk.Label(upd_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
+                                             justify="left", wraplength=900)
+        self.health_version_label.pack(side="left", padx=(12, 0))
         bk_row = tk.Frame(m, bg=theme.BG_CARD)
         bk_row.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
         self.health_backup_label = tk.Label(bk_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)

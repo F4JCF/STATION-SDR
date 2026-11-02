@@ -321,3 +321,19 @@ def get_pi_watchdog(host: str, port: int) -> dict:
     resp = requests.get(f"http://{host}:{port}/api/system/watchdog", timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_feeds(host: str, port: int) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/feeds", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def set_feeds(host: str, port: int, cfg: dict) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/feeds", json=cfg, timeout=60)
+    if resp.status_code >= 400:
+        try:
+            raise RuntimeError(resp.json().get("error") or resp.text)
+        except ValueError:
+            resp.raise_for_status()
+    return resp.json()

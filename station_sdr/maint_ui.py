@@ -224,3 +224,138 @@ class MaintMixin:
                 subprocess.Popen(["xdg-open", str(d)])
         except Exception as exc:
             messagebox.showinfo("Sauvegardes", f"Dossier des sauvegardes :\n{d}\n\n({exc})")
+
+
+class FeedsMixin:
+    """Fenêtre « Partage vers les réseaux » (ADS-B, AIS, APRS)."""
+
+    def _open_feeds_window(self):
+        if getattr(self, "_feeds_win", None) is not None and self._feeds_win.winfo_exists():
+            self._feeds_win.lift()
+            return
+        win = tk.Toplevel(self)
+        self._feeds_win = win
+        win.title("Partage vers les réseaux")
+        win.configure(bg=theme.BG)
+        win.geometry("900x720")
+        pad = {"padx": 16}
+        tk.Label(win, text="Partage vers les réseaux", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(
+            anchor="w", pady=(12, 2), **pad)
+        tk.Label(win, text=("Vos réceptions apparaissent sur les cartes mondiales. Le partage fonctionne pendant que "
+                            "le module a la clé SDR (rotation comprise). Rien n'est émis par radio."),
+                 bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE, wraplength=860, justify="left").pack(
+            anchor="w", **pad)
+        self._fv = {k: tk.BooleanVar(value=False) for k in ("adsbx", "adsblol", "airplaneslive", "ais_share",
+                                                             "aprs_igate")}
+        self._fs = {k: tk.StringVar(value="") for k in ("ais_share_key", "udp1", "udp2", "igate_call")}
+
+        def card(title):
+            o = theme.card(win)
+            o.pack(fill="x", pady=6, **pad)
+            f = o.inner
+            f.configure(padding=12)
+            tk.Label(f, text=title, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY_BOLD).pack(anchor="w")
+            return f
+
+        def check(parent, key, text):
+            tk.Checkbutton(parent, text=text, variable=self._fv[key], bg=theme.BG_CARD, fg=theme.TEXT,
+                           selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD, activeforeground=theme.TEXT,
+                           font=theme.FONT_BODY, highlightthickness=0, anchor="w").pack(anchor="w", pady=1)
+
+        def entry(parent, key, label, width=30):
+            r = tk.Frame(parent, bg=theme.BG_CARD)
+            r.pack(anchor="w", pady=2)
+            tk.Label(r, text=label, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, width=34,
+                     anchor="w").pack(side="left")
+            ttk.Entry(r, textvariable=self._fs[key], width=width).pack(side="left")
+
+        f = card("Avions (ADS-B)")
+        check(f, "adsbx", "ADS-B Exchange  (globe.adsbexchange.com)")
+        check(f, "adsblol", "adsb.lol  (données ouvertes)")
+        check(f, "airplaneslive", "airplanes.live")
+        self._feeds_uuid = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                    justify="left", wraplength=820)
+        self._feeds_uuid.pack(anchor="w", pady=(4, 0))
+
+        f = card("Navires (AIS)")
+        check(f, "ais_share", "Partage communautaire aiscatcher.org (carte en direct de toutes les stations)")
+        entry(f, "ais_share_key", "Clé aiscatcher.org (facultative) :")
+        entry(f, "udp1", "Sortie UDP 1 (hôte:port, ex. AISHub) :")
+        entry(f, "udp2", "Sortie UDP 2 (hôte:port, ex. MarineTraffic) :")
+        tk.Label(f, text=("AISHub et MarineTraffic donnent l'adresse et le port à saisir après inscription de "
+                          "votre station sur leur site."), bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+                 wraplength=820, justify="left").pack(anchor="w")
+
+        f = card("APRS VHF 144,800")
+        check(f, "aprs_igate", "iGate réception seule vers APRS-IS (aprs.fi) — rien n'est émis")
+        entry(f, "igate_call", "Indicatif de l'iGate VHF :", 12)
+        tk.Label(f, text="Différent de F4JCF-10, déjà utilisé par l'iGate LoRa (par exemple F4JCF-1).",
+                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+
+        bar = tk.Frame(win, bg=theme.BG)
+        bar.pack(fill="x", pady=8, **pad)
+        ttk.Button(bar, text="Appliquer", style="Accent.TButton", command=self._feeds_apply).pack(side="left")
+        self._feeds_status = tk.Label(bar, text="Lecture des réglages du Pi…", bg=theme.BG, fg=theme.MUTED,
+                                      font=theme.FONT_SUBTITLE, justify="left", wraplength=700)
+        self._feeds_status.pack(side="left", padx=12)
+        self._feeds_load()
+
+    def _feeds_load(self):
+        host, port = self._pi_endpoint()
+
+        def worker():
+            try:
+                cfg, err = api_client.get_feeds(host, port), None
+            except Exception as exc:
+                cfg, err = None, str(exc)
+            self.after(0, self._feeds_fill, cfg, err)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _feeds_fill(self, cfg, err):
+        if not getattr(self, "_feeds_win", None) or not self._feeds_win.winfo_exists():
+            return
+        if err:
+            self._feeds_status.config(text=f"Le Pi ne répond pas ou n'est pas à jour (« Mettre à jour le Pi ») : {err}",
+                                      fg=theme.ORANGE)
+            return
+        for k, v in self._fv.items():
+            v.set(bool(cfg.get(k)))
+        udp = list(cfg.get("ais_udp") or []) + ["", ""]
+        self._fs["udp1"].set(udp[0])
+        self._fs["udp2"].set(udp[1])
+        self._fs["ais_share_key"].set(cfg.get("ais_share_key") or "")
+        self._fs["igate_call"].set(cfg.get("igate_call") or "F4JCF-1")
+        self._feeds_show_uuid(cfg.get("uuid"))
+        self._feeds_status.config(text="Réglages actuels du Pi.", fg=theme.MUTED)
+
+    def _feeds_show_uuid(self, uuid):
+        self._feeds_uuid.config(text=(
+            f"Identifiant de votre station (UUID) : {uuid}\nVérification : adsbexchange.com/myip · my.adsb.lol · "
+            "airplanes.live/myfeed (à ouvrir quand la clé est sur ADS-B)") if uuid else "")
+
+    def _feeds_apply(self):
+        cfg = {k: bool(v.get()) for k, v in self._fv.items()}
+        cfg["ais_share_key"] = self._fs["ais_share_key"].get().strip()
+        cfg["ais_udp"] = [x.strip() for x in (self._fs["udp1"].get(), self._fs["udp2"].get()) if x.strip()]
+        cfg["igate_call"] = self._fs["igate_call"].get().strip().upper() or "F4JCF-1"
+        host, port = self._pi_endpoint()
+        self._feeds_status.config(text="Application sur le Pi…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                res, err = api_client.set_feeds(host, port, cfg), None
+            except Exception as exc:
+                res, err = None, str(exc)
+            self.after(0, done, res, err)
+
+        def done(res, err):
+            if not self._feeds_win.winfo_exists():
+                return
+            if err:
+                self._feeds_status.config(text=f"Refusé : {err}", fg=theme.RED)
+                return
+            self._feeds_show_uuid(res.get("uuid"))
+            self._feeds_status.config(text="Appliqué ✔  " + "  ·  ".join(res.get("result") or []), fg=theme.GREEN)
+
+        threading.Thread(target=worker, daemon=True).start()
