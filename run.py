@@ -3,9 +3,9 @@
 import faulthandler
 import sys
 
-if sys.stderr is not None:          # en cas de plantage natif : trace de tous les fils
+if sys.stderr is not None:          # en cas de plantage natif : trace du fil fautif
     try:
-        faulthandler.enable(all_threads=True)
+        faulthandler.enable(all_threads=False)
     except (RuntimeError, ValueError, OSError):
         pass
 

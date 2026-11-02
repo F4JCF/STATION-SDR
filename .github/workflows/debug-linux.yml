@@ -21,13 +21,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
-      - name: Depuis les sources sous gdb
+      - name: Depuis les sources (trace Python du fil fautif)
         run: |
           set +e
-          timeout 120 xvfb-run -a gdb -q -batch -ex "set pagination off" -ex run -ex "bt 40" \
-            -ex "info threads" --args python run.py > /tmp/gdb.log 2>&1
+          timeout 60 xvfb-run -a python run.py > /tmp/out.log 2>&1
           echo "code=$?"
-          grep -n -A60 "SIGSEGV" /tmp/gdb.log | grep -v "New Thread\|exited" | head -90
+          grep -n -A40 "Fatal Python error" /tmp/out.log | head -50
       - name: Exécutable (40 s)
         run: |
           pyinstaller --onefile --windowed --name STATION-SDR \
