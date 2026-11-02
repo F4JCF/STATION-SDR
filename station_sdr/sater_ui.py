@@ -304,8 +304,8 @@ class SaterMixin:
                                            "pour lui donner la clé."), fg=theme.MUTED)
             else:
                 self.elt_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
-                self.elt_info.config(text="Le service elt121 (port 5011) ne répond pas — lancer install_extras.sh "
-                                          "sur le Pi.", fg=theme.MUTED)
+                self.elt_info.config(text="Le service elt121 (port 5011) ne répond pas — installez-le depuis "
+                                          "Santé du Pi → « Modules du Pi… ».", fg=theme.MUTED)
             self.elt_state.config(text="—", bg=theme.BG_CARD_ALT, fg=theme.MUTED)
             self._gonio_station_line(None)
             return

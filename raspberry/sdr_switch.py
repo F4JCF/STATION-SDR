@@ -18,6 +18,7 @@ Doit tourner en root (il pilote systemctl). Port : SDR_SWITCH_PORT (5006).
 """
 
 import glob
+import collections
 import json
 import logging
 import os
@@ -387,7 +388,40 @@ BACKUP_PATHS = [
     "/etc/systemd/system/sdr-switch.service", "/etc/systemd/system/aprs-api.service",
     "/etc/systemd/system/svxlink-api.service", "/etc/systemd/system/station-monitor.service",
     "/var/lib/alsa/asound.state", "/etc/voicecard",
+    "/etc/default/tar1090", "/var/lib/elt121/config.json", "/var/lib/pocsag/config.json",
+    "/var/lib/station-monitor", "/etc/systemd/system/beacon406.service", "/etc/systemd/system/rtl433.service",
+    "/etc/systemd/system/elt121.service", "/etc/systemd/system/pocsag.service",
+    "/etc/systemd/system/direwolf-iss.service", "/etc/modprobe.d",
 ]
+
+
+def _inventory() -> str:
+    """État du Pi joint à la sauvegarde : ce qui est installé et comment,
+    pour pouvoir tout reconstruire sur une carte SD neuve."""
+    cmds = [
+        ("Système", ["cat", "/etc/os-release"]), ("Noyau", ["uname", "-a"]),
+        ("Services activés", ["systemctl", "list-unit-files", "--state=enabled", "--no-pager"]),
+        ("Ports en écoute", ["ss", "-ltnp"]),
+        ("Conteneurs Docker", ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.Ports}}"]),
+        ("Paquets installés à la main", ["apt-mark", "showmanual"]),
+        ("Crontab root", ["crontab", "-l"]),
+    ]
+    out = [f"Inventaire de {os.uname().nodename} — {time.strftime('%d/%m/%Y %H:%M')}\n"]
+    for title, cmd in cmds:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            txt = res.stdout or res.stderr
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            txt = f"(indisponible : {exc})"
+        out.append(f"===== {title} : {' '.join(cmd)}\n{txt}\n")
+    for c in ("openwebrx",):
+        try:
+            res = subprocess.run(["docker", "inspect", c], capture_output=True, text=True, timeout=20)
+            if res.returncode == 0:
+                out.append(f"===== docker inspect {c}\n{res.stdout}\n")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return "\n".join(out)
 
 
 def _service_logs(unit: str, lines: int = 60) -> str:
@@ -417,10 +451,15 @@ def _backup_tar() -> bytes:
                     tar.add(path, arcname=path.lstrip("/"))
                 except OSError:
                     pass
+        inv = _inventory().encode("utf-8")
+        ii = tarfile.TarInfo("INVENTAIRE.txt")
+        ii.size, ii.mtime = len(inv), time.time()
+        tar.addfile(ii, io.BytesIO(inv))
         info = tarfile.TarInfo("LISEZMOI.txt")
         txt = ("Sauvegarde des configurations de F4JCF-SDR-STATION ("
-               + time.strftime("%d/%m/%Y %H:%M") + ").\nRestauration : copier chaque fichier "
-               "à son emplacement d'origine (chemins conservés dans l'archive), puis redémarrer le Pi.\n"
+               + time.strftime("%d/%m/%Y %H:%M") + ").\nRestauration sur une carte neuve : script "
+               "reinstall_station.sh (voir le dépôt), qui réinstalle tout puis remet ces fichiers.\n"
+               "INVENTAIRE.txt décrit ce qui était installé sur le Pi.\n"
                "Attention : contient des mots de passe (Winlink, EchoLink) : à garder en lieu sûr.\n").encode("utf-8")
         info.size = len(txt)
         info.mtime = time.time()
@@ -537,6 +576,171 @@ def _power_action(action: str) -> None:
 
 # --------------------------------------------------------------- Serveur --
 
+# ------------------------------------------- Installation des modules --
+#
+# L'appli peut installer un module en un clic : le script d'installation
+# du dépôt (tag de la version de l'appli) est lancé dans une unité systemd
+# séparée, pour survivre au redémarrage de ce service en fin d'installation.
+
+INSTALLERS = {
+    # clé : (script, libellé, modes fournis, fichier témoin)
+    "extras": ("install_extras.sh", "Capteurs 433 MHz, APRS ISS et veille 121,5 MHz", ["433", "iss", "elt121"], None),
+    "beacon": ("install_beacon406.sh", "Balises de détresse 406 MHz (dec406)", ["beacon"], None),
+    "pocsag": ("install_pocsag.sh", "POCSAG (multimon-ng)", ["pocsag"], None),
+    "ais": ("install_ais.sh", "AIS (AIS-catcher)", ["ais"], None),
+    # (à venir) "radiosonde": ("install_radiosonde.sh", "Radiosondes (radiosonde_auto_rx)", ["radiosonde"], None),
+    # (à venir) "meteor": ("install_meteor.sh", "Images satellites Meteor-M", ["meteor"], None),
+    # (à venir) "feeds": ("install_feeds.sh", "Partage ADS-B vers ADS-B Exchange et adsb.lol", [], "/var/lib/sdr-switch/feeds_installed"),
+    "protect": ("protect_sd.sh", "Protection de la carte SD et chien de garde", [], "/etc/systemd/journald.conf.d/station-sdr.conf"),
+}
+INSTALL_LOG = os.path.join(STATE_DIR, "install.log")
+INSTALL_STATE = os.path.join(STATE_DIR, "install.json")
+INSTALL_UNIT = "station-install"
+
+
+def _install_status() -> dict:
+    global UNITS
+    try:
+        with open(INSTALL_STATE, encoding="utf-8") as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    running = _systemctl("is-active", f"{INSTALL_UNIT}.service").stdout.strip() in ("active", "activating")
+    log_txt = ""
+    try:
+        with open(INSTALL_LOG, encoding="utf-8", errors="replace") as f:
+            log_txt = f.read()[-12000:]
+    except OSError:
+        pass
+    code = None
+    for line in reversed(log_txt.splitlines()):
+        if line.startswith("FIN-INSTALLATION="):
+            code = int(line.split("=", 1)[1] or 1)
+            break
+    if not running and st.get("module") and not st.get("done"):
+        st["done"] = True
+        st["exit_code"] = code
+        UNITS = _detect_units()
+        try:
+            with open(INSTALL_STATE, "w", encoding="utf-8") as f:
+                json.dump(st, f)
+        except OSError:
+            pass
+    return {**st, "running": running, "log": log_txt, "exit_code": code if not running else None}
+
+
+def _modules_status() -> list:
+    out = []
+    for key, (script, label, modes, marker) in INSTALLERS.items():
+        if modes:
+            installed = all(UNITS.get(m) for m in modes)
+        else:
+            installed = bool(marker and os.path.exists(marker))
+        out.append({"key": key, "label": label, "installed": installed, "modes": modes})
+    return out
+
+
+def _start_install(module: str, ref: str):
+    script = INSTALLERS[module][0]
+    os.makedirs(STATE_DIR, exist_ok=True)
+    path = f"/var/lib/sdr-switch/{script}"
+    import urllib.request
+    with urllib.request.urlopen(f"{REPO_RAW}/{ref}/raspberry/{script}", timeout=30) as resp:
+        data = resp.read()
+    if not data.startswith(b"#!/bin/bash"):
+        raise RuntimeError("script d'installation invalide")
+    with open(path, "wb") as f:
+        f.write(data)
+    with open(INSTALL_STATE, "w", encoding="utf-8") as f:
+        json.dump({"module": module, "label": INSTALLERS[module][1], "ref": ref, "started": time.time(),
+                   "done": False}, f)
+    _systemctl("reset-failed", f"{INSTALL_UNIT}.service")
+    cmd = (f"echo '== Installation : {INSTALLERS[module][1]} ({ref})'; "
+           f"DEBIAN_FRONTEND=noninteractive bash {path} {ref}; echo FIN-INSTALLATION=$?")
+    res = subprocess.run(["systemd-run", f"--unit={INSTALL_UNIT}", "--collect",
+                          f"--property=StandardOutput=truncate:{INSTALL_LOG}",
+                          "bash", "-c", cmd], capture_output=True, text=True, timeout=30)
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip() or "systemd-run a échoué")
+
+
+# ---------------------------------------------- Chien de garde de la clé --
+#
+# Toutes les minutes : si le service du module qui détient la clé est
+# tombé, on le relance ; si la clé a disparu de l'USB, on la fait
+# réénumérer. Chaque action est notée (visible dans l'appli).
+
+_watch = {"events": collections.deque(maxlen=50), "missing": 0, "fails": 0, "last_bus_reset": 0.0}
+
+
+def _watch_event(msg: str) -> None:
+    log.warning("Chien de garde : %s", msg)
+    _watch["events"].appendleft({"time": time.time(), "text": msg})
+
+
+def _dongle_sysfs():
+    base = "/sys/bus/usb/devices"
+    try:
+        for d in os.listdir(base):
+            if (_read(f"{base}/{d}/idVendor") or "") == "0bda" and (_read(f"{base}/{d}/idProduct") or "") in ("2838", "2832"):
+                return f"{base}/{d}"
+    except OSError:
+        pass
+    return None
+
+
+def _reauthorize(dev: str) -> bool:
+    try:
+        with open(f"{dev}/authorized", "w") as f:
+            f.write("0")
+        time.sleep(2)
+        with open(f"{dev}/authorized", "w") as f:
+            f.write("1")
+        time.sleep(3)
+        return True
+    except OSError:
+        return False
+
+
+def _watchdog_loop() -> None:
+    time.sleep(120)  # laisse le démarrage se faire
+    while True:
+        try:
+            mode = _read_mode()
+            busy = _update_state.get("running") or _install_status().get("running")
+            if mode != OFF and not busy and _lock.acquire(blocking=False):
+                try:
+                    dev = _dongle_sysfs()
+                    if dev is None:
+                        _watch["missing"] += 1
+                        if _watch["missing"] == 2:
+                            _watch_event("clé SDR absente de l'USB depuis 2 minutes")
+                    else:
+                        if _watch["missing"] >= 2:
+                            _watch_event("clé SDR revenue sur l'USB : relance du module")
+                            for u in UNITS.get(mode, []):
+                                _start(u)
+                        _watch["missing"] = 0
+                        down = [u for u in UNITS.get(mode, []) if not _is_active(u)]
+                        if down:
+                            _watch["fails"] += 1
+                            if _watch["fails"] >= 3:
+                                _watch_event(f"{', '.join(down)} relancé 3 fois sans succès : réinitialisation USB de la clé")
+                                _reauthorize(dev)
+                                _watch["fails"] = 0
+                            else:
+                                _watch_event(f"{', '.join(down)} arrêté : relance")
+                            for u in down:
+                                _start(u)
+                        else:
+                            _watch["fails"] = 0
+                finally:
+                    _lock.release()
+        except Exception:
+            log.exception("Chien de garde")
+        time.sleep(60)
+
+
 def _mode_status() -> dict:
     mode = _read_mode()
     sched = _read_schedule()
@@ -601,6 +805,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"unit": unit, "label": LOG_UNITS[unit], "text": _service_logs(unit, lines)})
         elif path == "/api/system/update":
             self._send(200, {**_update_state, "pi_version": _read_pi_version()})
+        elif path == "/api/system/install":
+            self._send(200, _install_status())
+        elif path == "/api/system/modules":
+            self._send(200, {"modules": _modules_status(), "install": _install_status()})
+        elif path == "/api/system/watchdog":
+            self._send(200, {"events": list(_watch["events"]), "dongle_present": _dongle_sysfs() is not None})
         elif path == "/api/system/log-units":
             self._send(200, LOG_UNITS)
         elif path == "/api/system/backup":
@@ -636,6 +846,25 @@ class Handler(BaseHTTPRequestHandler):
             _update_state.update(running=True, result=None)
             threading.Thread(target=_update_pi, args=(ref,), daemon=True).start()
             self._send(200, {"started": True, "ref": ref})
+            return
+        if path == "/api/system/install":
+            from urllib.parse import parse_qs, urlparse
+            import re as _re
+            q = parse_qs(urlparse(self.path).query)
+            module = (q.get("module") or [""])[0]
+            ref = (q.get("ref") or [""])[0]
+            if module not in INSTALLERS or not _re.fullmatch(r"v\d+\.\d+\.\d+", ref):
+                self._send(400, {"error": "module ou version invalide"})
+                return
+            if _install_status().get("running") or _update_state["running"]:
+                self._send(409, {"error": "une installation ou une mise à jour est déjà en cours"})
+                return
+            try:
+                _start_install(module, ref)
+            except Exception as exc:
+                self._send(500, {"error": str(exc)})
+                return
+            self._send(200, {"started": True, "module": module})
             return
         if path == "/api/sdr/schedule":
             try:
@@ -693,4 +922,5 @@ if __name__ == "__main__":
     # en parallèle (elle peut prendre plusieurs secondes).
     threading.Thread(target=_apply_boot_mode, daemon=True).start()
     threading.Thread(target=_scheduler_loop, daemon=True).start()
+    threading.Thread(target=_watchdog_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

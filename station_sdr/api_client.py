@@ -302,3 +302,22 @@ def pocsag_clear(host: str, port: int) -> dict:
     resp = requests.post(f"http://{host}:{port}/api/pocsag/clear", timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_pi_modules(host: str, port: int) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/system/modules", timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def start_pi_install(host: str, port: int, module: str, ref: str) -> dict:
+    resp = requests.post(f"http://{host}:{port}/api/system/install", params={"module": module, "ref": ref},
+                         timeout=40)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_pi_watchdog(host: str, port: int) -> dict:
+    resp = requests.get(f"http://{host}:{port}/api/system/watchdog", timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()

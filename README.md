@@ -269,3 +269,16 @@ décodage POCSAG 512 / 1200 / 2400 bauds. Fréquence par défaut : DAPNET
 439,9875 MHz (radiomessagerie radioamateur). Alerte (appli et téléphone)
 quand un message contient l'indicatif ou un mot surveillé. Les messages
 restent en mémoire sur le Pi.
+
+## Maintenance depuis l'appli
+
+- **Santé du Pi → « Modules du Pi… »** : installation des modules en un clic
+  (le script du dépôt tourne dans une unité systemd à part, journal affiché).
+- **Chien de garde de la clé** : toutes les minutes, relance du module tombé ;
+  réinitialisation USB de la clé après 3 échecs ; interventions listées.
+- **Sauvegarde automatique** chaque semaine dans Documents\STATION-SDR\Sauvegardes
+  (8 conservées), avec un inventaire du Pi (`INVENTAIRE.txt`).
+- `protect_sd.sh` : journaux en mémoire, pas d'échange sur la carte, noatime,
+  /tmp en mémoire, chien de garde matériel.
+- `reinstall_station.sh vX.Y.Z sauvegarde.tar.gz` : reconstruit la station sur une
+  carte SD neuve puis remet la configuration.

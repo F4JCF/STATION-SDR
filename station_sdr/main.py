@@ -42,6 +42,7 @@ from .aircraft_db import RouteCache, TarDb
 from . import aprs_parse, map_tiles, sat_predict
 from .sater_ui import SaterMixin
 from .pocsag_ui import PocsagMixin
+from .maint_ui import MaintMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -678,7 +679,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, PocsagMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, MaintMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -724,6 +725,7 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
 
         self.after(100, self._check_previous_update_failure)
         self.after(200, self._check_update_on_startup)
+        self.after(90 * 1000, self._auto_backup_tick)
         self._start_refresh_loop()
 
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
@@ -1325,6 +1327,9 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
         if key == "stats" and not getattr(self, "_stats_poll_running", False):
             self._stats_poll_running = True
             self._stats_poll()
+        if key == "health":
+            threading.Thread(target=self._watchdog_fetch, daemon=True).start()
+            self._auto_backup_show()
         if key == "alerts" and hasattr(self, "nt_status"):
             self._notify_load()
         if key == "svxlink" and not getattr(self, "_svx_poll_running", False):
@@ -4368,7 +4373,7 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
             else:
                 self.b406_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
                 self.b406_info.config(text="Le service beacon406 (port 5009) ne répond pas — installez-le sur le Pi "
-                                           "(install_beacon406.sh).")
+                                           "(Santé du Pi → « Modules du Pi… » → Installer).")
             if "beacon" in self.tile_chips and mode != "elt121":
                 self.tile_chips["beacon"].config(text="—")
             return
@@ -4668,7 +4673,7 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
                 self.s433_info.config(text=f"La clé SDR est sur {SDR_MODE_LABELS.get(mode, mode)}.")
             else:
                 self.s433_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
-                self.s433_info.config(text="Service rtl433 (port 5010) injoignable : lancer install_extras.sh sur le Pi.")
+                self.s433_info.config(text="Service rtl433 (port 5010) injoignable : installez-le depuis Santé du Pi → « Modules du Pi… ».")
             return
         st = data["status"]
         self.s433_pill.config(text="  ÉCOUTE  " if st.get("running") else "  ARRÊTÉ  ",
@@ -5577,9 +5582,23 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
         self.health_version_label = tk.Label(upd_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
                                              justify="left", wraplength=1100)
         self.health_version_label.pack(side="left", padx=(10, 0))
+        ttk.Button(upd_row, text="Modules du Pi…", style="Accent.TButton",
+                   command=self._open_modules_window).pack(side="left", padx=(16, 0))
+        bk_row = tk.Frame(m, bg=theme.BG_CARD)
+        bk_row.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        self.health_backup_label = tk.Label(bk_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.health_backup_label.pack(side="left")
+        ttk.Button(bk_row, text="Ouvrir le dossier", style="Flat.TButton",
+                   command=self._open_backup_dir).pack(side="left", padx=(10, 0))
+        ttk.Button(bk_row, text="Sauvegarder maintenant", style="Flat.TButton",
+                   command=lambda: threading.Thread(target=self._auto_backup_run, args=(True,),
+                                                    daemon=True).start()).pack(side="left", padx=(6, 0))
+        self.health_watch_label = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                           justify="left", wraplength=1300)
+        self.health_watch_label.grid(row=4, column=0, columnspan=6, sticky="w", pady=(6, 0))
         self.health_maint_status = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                                             justify="left", wraplength=1300)
-        self.health_maint_status.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        self.health_maint_status.grid(row=5, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
     def _pi_endpoint(self):
         return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_sdr_switch", 5006)

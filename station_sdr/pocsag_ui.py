@@ -186,7 +186,7 @@ class PocsagMixin:
                 self.pg_info.config(text=f"La clé SDR est sur {labels.get(mode, mode)}.")
             else:
                 self.pg_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
-                self.pg_info.config(text="Service pocsag (port 5012) injoignable : lancer install_pocsag.sh sur le Pi.")
+                self.pg_info.config(text="Service pocsag (port 5012) injoignable : installez-le depuis Santé du Pi → « Modules du Pi… ».")
             if "pocsag" in self.tile_chips:
                 self.tile_chips["pocsag"].config(text="—")
             return
