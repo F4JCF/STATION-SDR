@@ -302,4 +302,47 @@ passages de Meteor-M N2-3 et N2-4 (SGP4, éléments CelesTrak), prend la clé
 pendant les passages assez hauts (mode « meteor », réception rtl_sdr →
 meteor_demod OQPSK 72k → meteor_decode, en direct), puis rend la clé au module
 précédent. Images PNG (redressées selon le sens du passage) et vignettes dans
-/var/lib/meteor/images (40 conservées), affichées par la vignette « Météo satellite ».
+/var/lib/meteor/images (40 conservées), affichées par la vignette « Images satellites ».
+
+### SSTV de l'ISS (événements ARISS)
+
+Même service : pendant un événement ARISS (case « toujours » ou date de fin),
+chaque passage de l'ISS assez haut est enregistré (rtl_fm FM 145,800 MHz,
+11 025 Hz, en RAM) puis décodé au coucher par `sstv_decode.py` (modes PD90,
+PD120, PD160, PD180, PD240, PD290 ; en-tête VIS ou, à défaut, tops de synchro :
+une image prise en cours est décodée aussi). Images rangées avec les Meteor
+(40 conservées), filtre « SSTV ISS » dans la galerie.
+
+### Bruit radio
+
+Chaque nuit (03:30 par défaut) ou sur demande, le service prend la clé deux
+minutes et mesure le bruit de fond (`rtl_power`, gain fixe 30 dB) sur 118-137,
+144-146, 156-163, 400-406, 430-440 et 1088-1092 MHz : médiane et 90e centile,
+historique dans /var/lib/meteor/noise.json. Fenêtre « Bruit radio… » (pages
+Images satellites et Statistiques) : courbes et écart à la médiane des 30 jours.
+
+## Station météo 433 MHz → APRS-WX
+
+Page Météo, carte « Station météo locale (433 MHz) » : choix du capteur reçu par
+rtl_433. Si la publication est activée, `station_monitor` envoie toutes les
+10 min un paquet météo APRS (`F4JCF-13`, position de la station) sur APRS-IS
+(rotate.aprs2.net:14580), uniquement si les valeurs ont moins de 30 min.
+
+## Messages APRS (APRS-IS)
+
+Page APRS, bouton « Messages APRS… » : messagerie texte par Internet (aucune
+émission radio), indicatif réglable (F4JCF par défaut, jamais F4JCF-1 ni
+F4JCF-10), accusés de réception et réémissions (30 s, 1, 2, 4 min), historique
+local (aprs_messages.json dans le dossier de configuration).
+
+## Plusieurs stations
+
+Puce « Station : … ▾ » du bandeau : bascule entre profils (adresse du Pi, iGate
+LoRa, position) ; « Gérer les stations… » pour en ajouter (Pi emporté en mission).
+
+## Envoi du compte rendu de mission
+
+Bouton « Envoyer… » de la page Mission : le Pi (`station_monitor`,
+POST /api/monitor/send_document) envoie le compte rendu HTML en pièce jointe par
+e-mail (SMTP configuré + destinataires supplémentaires) et/ou sur le téléphone
+par ntfy (résumé + fichier, case à décocher pour une mission sensible).

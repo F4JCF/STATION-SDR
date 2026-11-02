@@ -26,11 +26,13 @@ import json
 import logging
 import math
 import os
+import re
 import smtplib
 import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,6 +58,8 @@ DEFAULT_CONFIG = {
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
     "daily_report": {"enabled": False, "hour": 20},
+    # Station météo 433 MHz publiée sur APRS-IS (réseau CWOP / aprs.fi)
+    "wx": {"enabled": False, "device": "", "ssid": "13", "comment": "STATION-SDR Mougins"},
 }
 EVENT_LABELS = {
     "squawk": "Squawk d'urgence avion (7700 / 7600 / 7500)",
@@ -125,7 +129,7 @@ def public_config(cfg: dict) -> dict:
 
 def update_config(data: dict) -> dict:
     cfg = load_config()
-    for section in ("ntfy", "email", "events", "vigilance", "daily_report"):
+    for section in ("ntfy", "email", "events", "vigilance", "daily_report", "wx"):
         if isinstance(data.get(section), dict):
             for k, v in data[section].items():
                 if (section, k) in (("email", "password"), ("vigilance", "api_key")) and not v:
@@ -190,6 +194,88 @@ def send_email(cfg: dict, title: str, message: str) -> None:
             s.send_message(msg)
 
 
+EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
+
+
+def _smtp_send(e: dict, msg) -> None:
+    port = int(e.get("smtp_port") or 465)
+    if e.get("ssl", True):
+        with smtplib.SMTP_SSL(e["smtp_host"], port, timeout=60) as sm:
+            sm.login(e["user"], e["password"])
+            sm.send_message(msg)
+    else:
+        with smtplib.SMTP(e["smtp_host"], port, timeout=60) as sm:
+            sm.starttls()
+            sm.login(e["user"], e["password"])
+            sm.send_message(msg)
+
+
+def send_document(data: dict) -> dict:
+    """Compte rendu de mission : e-mail avec la pièce jointe HTML (au
+    destinataire configuré et/ou à des destinataires supplémentaires) et/ou
+    ntfy (résumé + fichier, ouvrable sur le téléphone)."""
+    cfg = load_config()
+    subject = str(data.get("subject") or "Compte rendu")[:200]
+    summary = str(data.get("summary") or "")[:4000]
+    doc = str(data.get("html") or "")
+    fname = re.sub(r"[^\w.-]+", "_", str(data.get("filename") or "compte_rendu.html"))[:120]
+    if not fname.endswith(".html"):
+        fname += ".html"
+    if len(doc) > 12_000_000:
+        raise ValueError("document trop volumineux")
+    result = {"time": time.time(), "title": subject, "message": summary, "channels": {}}
+    if data.get("email"):
+        e = cfg["email"]
+        extra = [a.strip() for a in re.split(r"[,;\s]+", str(data.get("extra_to") or "")) if a.strip()]
+        bad = [a for a in extra if not EMAIL_RE.match(a)]
+        to = ([a.strip() for a in re.split(r"[,;]+", e.get("to") or "") if a.strip()]
+              if data.get("email_main", True) else [])
+        to += [a for a in extra if a not in to and a not in bad]
+        if bad:
+            result["channels"]["adresses ignorées"] = ", ".join(bad)
+        if not (e.get("smtp_host") and e.get("user") and e.get("password")):
+            result["channels"]["email"] = "échec : e-mail non configuré (Notifications, page Santé du Pi)"
+        elif not to:
+            result["channels"]["email"] = "échec : aucun destinataire"
+        else:
+            try:
+                msg = EmailMessage()
+                msg["Subject"] = f"[F4JCF-SDR-STATION] {subject}"
+                msg["From"] = e["user"]
+                msg["To"] = ", ".join(to)
+                msg.set_content(summary + "\n\nLe compte rendu complet (carte, relèvements, journal) est en pièce "
+                                "jointe : l'ouvrir dans un navigateur, puis Imprimer → Enregistrer en PDF si besoin."
+                                "\n\n-- \nF4JCF-SDR-STATION")
+                msg.add_attachment(doc.encode("utf-8"), maintype="text", subtype="html", filename=fname)
+                _smtp_send(e, msg)
+                result["channels"]["email"] = "ok : " + ", ".join(to)
+            except Exception as exc:
+                result["channels"]["email"] = f"échec : {exc}"
+    if data.get("ntfy"):
+        n = cfg["ntfy"]
+        if not n.get("topic"):
+            result["channels"]["ntfy"] = "échec : aucun sujet ntfy configuré"
+        else:
+            try:
+                q = {"title": subject, "message": summary[:3000], "tags": "clipboard"}
+                body = b""
+                if data.get("ntfy_file", True) and doc:
+                    q["filename"] = fname
+                    body = doc.encode("utf-8")
+                url = f"{n.get('server', 'https://ntfy.sh').rstrip('/')}/{n['topic']}?{urllib.parse.urlencode(q)}"
+                req = urllib.request.Request(url, data=body, method="PUT")
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    resp.read()
+                result["channels"]["ntfy"] = "ok"
+            except Exception as exc:
+                result["channels"]["ntfy"] = f"échec : {exc}"
+    log.info("Document « %s » : %s", subject, result["channels"])
+    with _lock:
+        _sent.insert(0, result)
+        del _sent[50:]
+    return result
+
+
 def notify(title: str, message: str, priority: int = 4, event: str = None, force: bool = False) -> dict:
     cfg = load_config()
     if event and not force and not cfg["events"].get(event, True):
@@ -225,6 +311,201 @@ def event_once(key: str, cooldown: float) -> bool:
     if not _primed:
         return False
     return last is None or now - last >= cooldown
+
+
+# ------------------------------------------- Station météo → APRS-WX --
+#
+# Les capteurs 433 MHz ne sont reçus que lorsque la clé SDR est sur le module
+# « 433 » (rotation) : on lit le fichier des capteurs, et on ne publie que des
+# valeurs de moins de 30 minutes, au plus toutes les 10 minutes.
+
+RTL433_STORE = os.environ.get("RTL433_STORE", "/var/lib/rtl433/devices.json")
+APRS_IS = ("rotate.aprs2.net", 14580)
+_wx = {"last_sent": None, "last_packet": None, "last_error": None, "rain": []}
+
+
+def aprs_passcode(call: str) -> int:
+    base = call.upper().split("-")[0]
+    h = 0x73E2
+    for i in range(0, len(base), 2):
+        h ^= ord(base[i]) << 8
+        if i + 1 < len(base):
+            h ^= ord(base[i + 1])
+    return h & 0x7FFF
+
+
+def wx_devices() -> dict:
+    try:
+        with open(RTL433_STORE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    try:
+        live = fetch_json("http://127.0.0.1:5010/api/433/devices", 3)
+        for d in live if isinstance(live, list) else (live or {}).values():
+            if isinstance(d, dict) and d.get("key"):
+                data[d["key"]] = d
+    except Exception:
+        pass
+    return data
+
+
+def wx_values(dev: dict) -> dict:
+    """Valeurs normalisées (°C, %, hPa, km/h, degrés, mm cumulés)."""
+    v = dev.get("values") or {}
+    out = {}
+
+    def num(*keys):
+        for k in keys:
+            if isinstance(v.get(k), (int, float)):
+                return float(v[k])
+        return None
+    t = num("temperature_C", "temperature_1_C")
+    if t is None and num("temperature_F") is not None:
+        t = (num("temperature_F") - 32) * 5 / 9
+    out["temp_c"] = t
+    out["humidity"] = num("humidity", "humidity_1")
+    p = num("pressure_hPa")
+    if p is None and num("pressure_kPa") is not None:
+        p = num("pressure_kPa") * 10
+    out["pressure_hpa"] = p
+    w = num("wind_avg_km_h")
+    if w is None and num("wind_avg_m_s", "wind_speed_m_s") is not None:
+        w = num("wind_avg_m_s", "wind_speed_m_s") * 3.6
+    if w is None and num("wind_avg_mi_h") is not None:
+        w = num("wind_avg_mi_h") * 1.609344
+    out["wind_kmh"] = w
+    g = num("wind_max_km_h")
+    if g is None and num("wind_max_m_s", "gust_speed_m_s") is not None:
+        g = num("wind_max_m_s", "gust_speed_m_s") * 3.6
+    if g is None and num("wind_max_mi_h") is not None:
+        g = num("wind_max_mi_h") * 1.609344
+    out["gust_kmh"] = g
+    out["wind_dir"] = num("wind_dir_deg")
+    r = num("rain_mm")
+    if r is None and num("rain_in") is not None:
+        r = num("rain_in") * 25.4
+    out["rain_mm"] = r
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def wx_candidates() -> list:
+    out = []
+    for key, d in wx_devices().items():
+        if "tpms" in str(d.get("model", "")).lower():
+            continue                      # capteurs de pneus : pas une station météo
+        vals = wx_values(d)
+        if "temp_c" in vals or "humidity" in vals or "wind_kmh" in vals:
+            out.append({"key": key, "model": d.get("model"), "id": d.get("id"), "channel": d.get("channel"),
+                        "last_seen": d.get("last_seen"), "values": vals})
+    out.sort(key=lambda d: -(d.get("last_seen") or 0))
+    return out
+
+
+def _deg_min(value: float, lat: bool) -> str:
+    hemi = ("N" if value >= 0 else "S") if lat else ("E" if value >= 0 else "W")
+    a = abs(value)
+    deg = int(a)
+    mins = (a - deg) * 60
+    return f"{deg:02d}{mins:05.2f}{hemi}" if lat else f"{deg:03d}{mins:05.2f}{hemi}"
+
+
+def wx_packet(cfg: dict, vals: dict, when: float) -> str:
+    call = f"{cfg['mycall'].split('-')[0]}-{cfg['wx'].get('ssid') or '13'}"
+    stamp = time.strftime("%d%H%M", time.gmtime(when))
+    pos = f"{_deg_min(cfg['station_lat'], True)}/{_deg_min(cfg['station_lon'], False)}"
+    wd = f"{int(round(vals['wind_dir'])) % 360:03d}" if "wind_dir" in vals else "..."
+    ws = f"{int(round(vals['wind_kmh'] / 1.609344)):03d}" if "wind_kmh" in vals else "..."
+    body = f"_{wd}/{ws}"
+    body += f"g{int(round(vals['gust_kmh'] / 1.609344)):03d}" if "gust_kmh" in vals else "g..."
+    if "temp_c" in vals:
+        tf = int(round(vals["temp_c"] * 9 / 5 + 32))
+        body += f"t{tf:03d}" if tf >= 0 else f"t-{abs(tf):02d}"
+    else:
+        body += "t..."
+    rain_h = wx_rain_hour(vals.get("rain_mm"), when)
+    if rain_h is not None:
+        body += f"r{min(999, int(round(rain_h / 0.254))):03d}"
+    if "humidity" in vals:
+        h = int(round(vals["humidity"]))
+        body += f"h{0 if h >= 100 else max(1, h):02d}"
+    if "pressure_hpa" in vals:
+        body += f"b{int(round(vals['pressure_hpa'] * 10)):05d}"
+    comment = re.sub(r"[^\x20-\x7e]", "", str(cfg["wx"].get("comment") or ""))[:40]
+    return f"{call}>APZSDR,TCPIP*:@{stamp}z{pos}{body}{comment}"
+
+
+def wx_rain_hour(total, when):
+    """Pluie de la dernière heure (mm) à partir du cumul, si on a un relevé d'il y a ~1 h."""
+    if total is None:
+        return None
+    hist = _wx["rain"]
+    if not hist or hist[-1][1] != total or when - hist[-1][0] > 600:
+        hist.append((when, total))
+    del hist[:-200]
+    old = [h for h in hist if 3000 <= when - h[0] <= 4500]
+    if not old:
+        return None
+    diff = total - old[0][1]
+    return diff if diff >= 0 else None      # remise à zéro du cumul : on s'abstient
+
+
+def aprs_is_send(call: str, lines: list) -> None:
+    import socket
+    with socket.create_connection(APRS_IS, timeout=20) as sk:
+        sk.settimeout(20)
+        sk.recv(512)
+        sk.sendall(f"user {call} pass {aprs_passcode(call)} vers STATION-SDR 1.31\r\n".encode())
+        resp = b""
+        end = time.time() + 8
+        while b"logresp" not in resp and time.time() < end:
+            try:
+                chunk = sk.recv(512)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            resp += chunk
+        if b" unverified" in resp:
+            raise RuntimeError("APRS-IS : indicatif non vérifié")
+        for line in lines:
+            sk.sendall((line + "\r\n").encode("ascii", "replace"))
+        time.sleep(1)
+
+
+def wx_status() -> dict:
+    cfg = load_config()
+    w = cfg["wx"]
+    cands = wx_candidates()
+    sel = next((c for c in cands if c["key"] == w.get("device")), None)
+    return {"config": w, "call": f"{cfg['mycall'].split('-')[0]}-{w.get('ssid') or '13'}", "devices": cands,
+            "selected": sel, "last_sent": _wx["last_sent"], "last_packet": _wx["last_packet"],
+            "last_error": _wx["last_error"]}
+
+
+def wx_loop() -> None:
+    time.sleep(30)
+    while True:
+        try:
+            cfg = load_config()
+            w = cfg["wx"]
+            if w.get("enabled") and w.get("device"):
+                dev = wx_devices().get(w["device"])
+                fresh = dev and time.time() - (dev.get("last_seen") or 0) < 1800
+                due = not _wx["last_sent"] or time.time() - _wx["last_sent"] >= 600
+                if fresh and due:
+                    vals = wx_values(dev)
+                    if vals:
+                        pkt = wx_packet(cfg, vals, dev["last_seen"])
+                        aprs_is_send(pkt.split(">", 1)[0], [pkt])
+                        _wx.update(last_sent=time.time(), last_packet=pkt, last_error=None)
+                        log.info("APRS-WX : %s", pkt)
+                elif dev and not fresh:
+                    _wx["last_error"] = "valeurs de plus de 30 min (clé hors 433 MHz) : envoi suspendu"
+        except Exception as exc:
+            _wx["last_error"] = str(exc)
+            log.warning("APRS-WX : %s", exc)
+        time.sleep(60)
 
 
 # --------------------------------------------------------- Collecte -------
@@ -557,7 +838,7 @@ def vigilance_loop() -> None:
 
 REPORT_STATE = os.path.join(os.path.dirname(DB_PATH), "report_last")
 MODE_NAMES = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "iss": "APRS ISS", "beacon": "Balise 406",
-              "433": "433 MHz", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Satellite Meteor", "openwebrx": "OpenWebRX", "off": "arrêtée"}
+              "433": "433 MHz", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "openwebrx": "OpenWebRX", "off": "arrêtée"}
 
 
 def build_report(hours: int = 24) -> tuple:
@@ -733,7 +1014,7 @@ button:disabled{opacity:.5}
 <div class="card"><div class="lbl">Vigilance Météo-France</div><div id="vigi" class="muted">—</div></div>
 <div class="card"><div class="lbl">Dernières alertes</div><div id="alerts" class="muted">—</div></div>
 <script>
-const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",elt121:"121,5 MHz",pocsag:"POCSAG",radiosonde:"Radiosondes",meteor:"Meteor","433":"433 MHz",iss:"APRS ISS",off:"Arrêtée"};
+const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",elt121:"121,5 MHz",pocsag:"POCSAG",radiosonde:"Radiosondes",meteor:"Images sat.","433":"433 MHz",iss:"APRS ISS",off:"Arrêtée"};
 const VC={1:["#3fb950","VERT"],2:["#eab308","JAUNE"],3:["#f97316","ORANGE"],4:["#f85149","ROUGE"]};
 let busy=false;
 function tile(l,v,c,s){return `<div class="tile"><div class="lbl">${l}</div><div class="big ${c||""}">${v}</div>${s?`<div class="muted" style="font-size:12px">${s}</div>`:""}</div>`}
@@ -858,6 +1139,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/monitor/report":
             title, body = build_report()
             self._send(200, {"title": title, "body": body})
+        elif path == "/api/wx/status":
+            self._send(200, wx_status())
         elif path == "/api/vigilance":
             self._send(200, dict(_vigilance))
         elif path == "/api/monitor/notifications":
@@ -884,6 +1167,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, proxy_sdr_mode(mode))
             except Exception as exc:
                 self._send(502, {"error": str(exc)})
+        elif path == "/api/wx/config":
+            cfg = update_config({"wx": data.get("wx") if isinstance(data.get("wx"), dict) else data})
+            if isinstance(data, dict) and data.get("send_now"):
+                _wx["last_sent"] = None
+            self._send(200, {"ok": True, "config": cfg["wx"]})
+        elif path == "/api/monitor/send_document":
+            try:
+                self._send(200, send_document(data if isinstance(data, dict) else {}))
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
         elif path == "/api/monitor/report":
             title, body = build_report()
             self._send(200, notify(title, body, 2, force=True))
@@ -903,4 +1196,5 @@ if __name__ == "__main__":
     threading.Thread(target=collector_loop, daemon=True).start()
     threading.Thread(target=vigilance_loop, daemon=True).start()
     threading.Thread(target=report_loop, daemon=True).start()
+    threading.Thread(target=wx_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

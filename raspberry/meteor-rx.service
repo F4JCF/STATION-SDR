@@ -1,5 +1,5 @@
 [Unit]
-Description=Satellites Meteor-M : reception d'un passage (cle SDR)
+Description=Satellites : reception (cle SDR)
 
 [Service]
 Type=simple

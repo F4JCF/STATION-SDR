@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Réception d'un passage Meteor-M (lancé par la bascule de clé, mode
-« meteor ») : rtl_sdr → meteor_demod → meteor_decode, en direct, jusqu'au
-coucher du satellite. Le résultat (PNG, vignette, fiche) est rangé dans
-/var/lib/meteor/images. Ensuite le service reste au repos jusqu'à la
+"""Tâche satellite lancée par la bascule de clé (mode « meteor ») :
+  - « lrpt »  : passage Meteor-M, rtl_sdr → meteor_demod → meteor_decode ;
+  - « sstv »  : passage de l'ISS, audio FM 145,800 MHz enregistré puis décodé
+                (sstv_decode.py) au coucher ;
+  - « noise » : relevé du bruit radio (rtl_power) sur quelques bandes.
+Les images (PNG, vignette, fiche) vont dans /var/lib/meteor/images, les relevés
+dans /var/lib/meteor/noise.json. Ensuite le service reste au repos jusqu'à la
 prochaine bascule (le chien de garde ne le considère pas comme tombé)."""
 
 import json
@@ -25,26 +28,136 @@ def finish(result: dict) -> None:
         json.dump(result, f)
 
 
-def post_process(job, png):
+def post_process(job, png, extra=None):
     from PIL import Image
     img = Image.open(png)
     w, h = img.size
     if h < 64:
         return None
-    if job.get("northbound"):
+    if job.get("northbound") and job.get("kind", "lrpt") == "lrpt":
         img = img.rotate(180)
         img.save(png)
     thumb = img.convert("RGB")
     thumb.thumbnail((480, 900))
     thumb.save(png[:-4] + ".jpg", quality=82)
     meta = {"name": job["name"], "sat": job["sat"], "aos": job["aos"], "max_el": job["max_el"],
-            "width": w, "lines": h, "size": os.path.getsize(png), "time": time.time()}
+            "width": w, "lines": h, "size": os.path.getsize(png), "time": time.time(),
+            "kind": job.get("kind", "lrpt"), **(extra or {})}
     with open(png[:-4] + ".json", "w", encoding="utf-8") as f:
         json.dump(meta, f)
     return meta
 
 
+def receive_sstv(job):
+    """Enregistre l'audio FM de l'ISS jusqu'au coucher, puis décode."""
+    if not shutil.which("rtl_fm"):
+        finish({"result": "rtl_fm absent"})
+        return
+    raw = "/run/meteor/sstv.raw"
+    rate = 11025
+    rec_start = time.time()
+    with open(raw, "wb") as out:
+        p = subprocess.Popen(["rtl_fm", "-M", "fm", "-f", str(int(job["freq_mhz"] * 1e6)), "-s", "24000",
+                              "-r", str(rate), "-F", "9", "-g", str(job["gain"]), "-"],
+                             stdout=out, stderr=subprocess.DEVNULL)
+        log.info("Écoute SSTV %s jusqu'à %s", job["sat"], time.strftime("%H:%M:%S", time.localtime(job["los"])))
+        while time.time() < job["los"] and p.poll() is None:
+            time.sleep(2)
+        if p.poll() is None:
+            p.send_signal(signal.SIGINT)
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    try:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import sstv_decode
+        x, fs = sstv_decode.load_audio(raw, rate)
+        if len(x) < rate * 10:
+            finish({"result": "enregistrement trop court"})
+            return
+        results = sstv_decode.decode(x, fs)
+    except ImportError as exc:
+        finish({"result": f"décodeur SSTV absent ({exc}) : mettre à jour le Pi"})
+        return
+    finally:
+        try:
+            os.remove(raw)
+        except OSError:
+            pass
+    os.makedirs(job["out_dir"], exist_ok=True)
+    names = []
+    for i, r in enumerate(results, 1):
+        name = job["name"] + (f"-{i}" if len(results) > 1 else "")
+        png = os.path.join(job["out_dir"], name + ".png")
+        r["image"].save(png)
+        post_process({**job, "name": name}, png, {"mode": r["mode"], "complete": r["complete"],
+                                                    "quality": r["quality"],
+                                                    "rx_time": round(rec_start + r["start"])})
+        names.append(name)
+    if not names:
+        finish({"result": "aucune image SSTV (pas d'émission ou signal trop faible)"})
+        return
+    finish({"result": f"{len(names)} image(s) SSTV", "name": names[0]})
+    log.info("SSTV : %d image(s)", len(names))
+
+
+NOISE_FILE = "/var/lib/meteor/noise.json"
+
+
+def receive_noise(job):
+    """Relevé du bruit : rtl_power une fois par bande, médiane et 90e centile (dB)."""
+    if not shutil.which("rtl_power"):
+        finish({"result": "rtl_power absent"})
+        return
+    entry = {"time": time.time(), "gain": job["gain"], "bands": {}}
+    for name, lo, hi in job["bands"]:
+        span = hi - lo
+        step = 10000 if span <= 5 else 25000
+        try:
+            out = subprocess.run(["rtl_power", "-f", f"{lo}M:{hi}M:{step}", "-i", "8", "-1",
+                                  "-g", str(job["gain"]), "-"], capture_output=True, text=True, timeout=120).stdout
+        except subprocess.TimeoutExpired:
+            continue
+        vals = []
+        for line in out.splitlines():
+            parts = line.split(",")
+            if len(parts) > 6:
+                for v in parts[6:]:
+                    try:
+                        x = float(v)
+                    except ValueError:
+                        continue
+                    if x == x and abs(x) < 200:
+                        vals.append(x)
+        if vals:
+            vals.sort()
+            entry["bands"][name] = {"median": round(vals[len(vals) // 2], 2),
+                                    "p90": round(vals[int(len(vals) * 0.9)], 2),
+                                    "max": round(vals[-1], 2)}
+    try:
+        with open(NOISE_FILE, encoding="utf-8") as f:
+            hist = json.load(f)
+    except (OSError, ValueError):
+        hist = []
+    if entry["bands"]:
+        hist.append(entry)
+        tmp = NOISE_FILE + ".new"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(hist[-500:], f)
+        os.replace(tmp, NOISE_FILE)
+    finish({"result": f"bruit mesuré sur {len(entry['bands'])} bande(s)"})
+
+
 def receive(job):
+    kind = job.get("kind", "lrpt")
+    if kind == "sstv":
+        receive_sstv(job)
+        return
+    if kind == "noise":
+        receive_noise(job)
+        return
     os.makedirs(job["out_dir"], exist_ok=True)
     tmp_png = f"/run/meteor/{job['name']}.png"
     for tool in ("rtl_sdr", "meteor_demod", "meteor_decode"):

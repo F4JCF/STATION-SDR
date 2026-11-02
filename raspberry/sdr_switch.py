@@ -60,7 +60,7 @@ CANDIDATES = {
 }
 
 LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Satellite Meteor", "off": "Arrêtée"}
+          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "off": "Arrêtée"}
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
@@ -380,7 +380,7 @@ LOG_UNITS = {
     "elt121": "Veille 121,5 MHz",
     "pocsag": "POCSAG (multimon-ng)",
     "docker:radiosonde_auto_rx": "Radiosondes (auto_rx)",
-    "meteor-api": "Satellites Meteor (planification)", "meteor-rx": "Satellites Meteor (réception)",
+    "meteor-api": "Satellites (planification)", "meteor-rx": "Satellites (réception)",
 }
 
 # Fichiers de configuration inclus dans la sauvegarde.
@@ -504,10 +504,37 @@ PI_FILES = [
     ("raspberry/pocsag.service", "/etc/systemd/system/pocsag.service", 0o644),
     ("raspberry/meteor_api.py", "/usr/local/bin/meteor_api.py", 0o755),
     ("raspberry/meteor_rx.py", "/usr/local/bin/meteor_rx.py", 0o755),
+    ("raspberry/sstv_decode.py", "/usr/local/bin/sstv_decode.py", 0o755),
     ("raspberry/meteor-api.service", "/etc/systemd/system/meteor-api.service", 0o644),
     ("raspberry/meteor-rx.service", "/etc/systemd/system/meteor-rx.service", 0o644),
 ]
+# Fichiers apparus après coup dans un module : installés si le module l'est
+PI_COMPANIONS = {"/usr/local/bin/sstv_decode.py": "/usr/local/bin/meteor_rx.py"}
 PI_VERSION_FILE = os.path.join(STATE_DIR, "pi_version")
+
+
+def _heal_companions():
+    """Au démarrage : récupère un fichier compagnon manquant (mise à jour faite
+    par une version précédente de ce service, qui ne le connaissait pas)."""
+    import urllib.request
+    ref = _read_pi_version()
+    if not ref:
+        return
+    for src, dest, mode in PI_FILES:
+        need = PI_COMPANIONS.get(dest)
+        if not need or os.path.exists(dest) or not os.path.exists(need):
+            continue
+        try:
+            with urllib.request.urlopen(f"{REPO_RAW}/{ref}/{src}", timeout=30) as resp:
+                data = resp.read()
+            compile(data, src, "exec")
+            with open(dest + ".new", "wb") as f:
+                f.write(data)
+            os.chmod(dest + ".new", mode)
+            os.replace(dest + ".new", dest)
+            log.info("Fichier compagnon installé : %s", dest)
+        except Exception as exc:
+            log.warning("Fichier compagnon %s : %s", dest, exc)
 _update_state = {"running": False, "log": [], "result": None}
 
 
@@ -532,7 +559,10 @@ def _update_pi(ref: str) -> None:
         say(f"Téléchargement des scripts de la version {ref}")
         fetched = []
         for src, dest, mode in PI_FILES:
-            if not os.path.exists(dest) and "sdr_switch" not in dest and "sdr-switch" not in dest:
+            companion = PI_COMPANIONS.get(dest)
+            if companion and os.path.exists(companion):
+                pass
+            elif not os.path.exists(dest) and "sdr_switch" not in dest and "sdr-switch" not in dest:
                 continue  # composant jamais installé sur ce Pi : on ne l'ajoute pas
             url = f"{REPO_RAW}/{ref}/{src}"
             with urllib.request.urlopen(url, timeout=30) as resp:
@@ -601,7 +631,7 @@ INSTALLERS = {
     "pocsag": ("install_pocsag.sh", "POCSAG (multimon-ng)", ["pocsag"], None),
     "ais": ("install_ais.sh", "AIS (AIS-catcher)", ["ais"], None),
     "radiosonde": ("install_radiosonde.sh", "Radiosondes (radiosonde_auto_rx)", ["radiosonde"], None),
-    "meteor": ("install_meteor.sh", "Images satellites Meteor-M", ["meteor"], None),
+    "meteor": ("install_meteor.sh", "Images satellites : Meteor-M, SSTV de l'ISS, bruit radio", ["meteor"], None),
     "protect": ("protect_sd.sh", "Protection de la carte SD et chien de garde", [], "/etc/systemd/journald.conf.d/station-sdr.conf"),
 }
 INSTALL_LOG = os.path.join(STATE_DIR, "install.log")
@@ -1130,4 +1160,5 @@ if __name__ == "__main__":
     threading.Thread(target=_apply_boot_mode, daemon=True).start()
     threading.Thread(target=_scheduler_loop, daemon=True).start()
     threading.Thread(target=_watchdog_loop, daemon=True).start()
+    threading.Thread(target=_heal_companions, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

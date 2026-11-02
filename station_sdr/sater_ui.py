@@ -611,7 +611,7 @@ class SaterMixin:
         self.g_click_btn = ttk.Button(r1, text="📍 Sur la carte", style="Flat.TButton", command=self._gonio_click_mode)
         self.g_click_btn.pack(side="left", padx=4)
         ttk.Button(r1, text="Ma station", style="Flat.TButton",
-                   command=lambda: self.g_pos.set(f"{STATION[0]:.5f}, {STATION[1]:.5f}")).pack(side="left")
+                   command=lambda: self.g_pos.set("{:.5f}, {:.5f}".format(*self._station_coords()))).pack(side="left")
         r2 = tk.Frame(f, bg=theme.BG_CARD)
         r2.pack(fill="x", pady=4)
         tk.Label(r2, text="Azimut (°) :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY).pack(side="left")
@@ -831,7 +831,7 @@ class SaterMixin:
         self.config_data["gonio_line_km"] = length
         bl = self._gonio_list()
         teams = {}
-        self._gonio_objs.append(m.set_marker(*STATION, text="F4JCF", text_color="#16a34a",
+        self._gonio_objs.append(m.set_marker(*self._station_coords(), text="F4JCF", text_color="#16a34a",
                                              marker_color_circle="#14532d", marker_color_outside="#22c55e"))
         for b in bl:
             col = teams.setdefault(b.get("team"), TEAM_COLORS[len(teams) % len(TEAM_COLORS)])
@@ -849,7 +849,7 @@ class SaterMixin:
                                                color="#ef4444", width=3))
             self._gonio_objs.append(m.set_marker(est["lat"], est["lon"], text="Zone probable", text_color="#b91c1c",
                                                  marker_color_circle="#7f1d1d", marker_color_outside="#ef4444"))
-            d, brg = gonio.dist_bearing(STATION[0], STATION[1], est["lat"], est["lon"])
+            d, brg = gonio.dist_bearing(*self._station_coords(), est["lat"], est["lon"])
             radius = f"{est['radius_km']:.1f}".replace(".", ",")
             self.g_result.config(text=(f"{est['lat']:.5f}, {est['lon']:.5f}   ({fmt_dm(est['lat'], est['lon'])})\n"
                                        f"rayon ≈ {radius} km"), fg=theme.RED)
@@ -908,7 +908,7 @@ class SaterMixin:
                          + (f" (lu {b['az_in']:.0f}° magn.)" if b.get("mag") else ""))
         est = self._gonio_est
         if est and est.get("lat") is not None:
-            d, brg = gonio.dist_bearing(STATION[0], STATION[1], est["lat"], est["lon"])
+            d, brg = gonio.dist_bearing(*self._station_coords(), est["lat"], est["lon"])
             lines += [f"Zone probable : {est['lat']:.5f}, {est['lon']:.5f} ({fmt_dm(est['lat'], est['lon'])}), "
                       f"rayon ≈ {est['radius_km']:.1f} km, qualité {est['quality']}",
                       f"Soit {d:.1f} km au {brg:.0f}° de F4JCF (Mougins)",

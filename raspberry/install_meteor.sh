@@ -1,5 +1,6 @@
 #!/bin/bash
-# Module « Images satellites Meteor-M » de F4JCF-SDR-STATION.
+# Module « Satellites » de F4JCF-SDR-STATION : images Meteor-M, SSTV de l'ISS,
+# relevé du bruit radio.
 # Décodeurs libres meteor_demod et meteor_decode (Davide Belloli, dbdexter-dev),
 # compilés sur le Pi ; planification des passages (SGP4) et service de réception.
 # Usage : ... | sudo bash -s <version>
@@ -10,7 +11,7 @@ BASE="https://raw.githubusercontent.com/F4JCF/STATION-SDR/$REF/raspberry"
 SRC=/opt/meteor-src
 
 echo "== Paquets (compilation, SGP4, images)"
-apt-get install -y build-essential cmake git libpng-dev rtl-sdr python3-sgp4 python3-pil >/dev/null
+apt-get install -y build-essential cmake git libpng-dev rtl-sdr python3-sgp4 python3-pil python3-numpy >/dev/null
 
 echo "== Compilation de meteor_demod et meteor_decode (quelques minutes)"
 rm -rf "$SRC"; mkdir -p "$SRC"
@@ -25,7 +26,8 @@ command -v meteor_demod >/dev/null && command -v meteor_decode >/dev/null || { e
 echo "== Services"
 curl -fsSL -o /usr/local/bin/meteor_api.py "$BASE/meteor_api.py"
 curl -fsSL -o /usr/local/bin/meteor_rx.py "$BASE/meteor_rx.py"
-chmod 755 /usr/local/bin/meteor_api.py /usr/local/bin/meteor_rx.py
+curl -fsSL -o /usr/local/bin/sstv_decode.py "$BASE/sstv_decode.py"
+chmod 755 /usr/local/bin/meteor_api.py /usr/local/bin/meteor_rx.py /usr/local/bin/sstv_decode.py
 curl -fsSL -o /etc/systemd/system/meteor-api.service "$BASE/meteor-api.service"
 curl -fsSL -o /etc/systemd/system/meteor-rx.service "$BASE/meteor-rx.service"
 curl -fsSL -o /usr/local/bin/sdr_switch.py "$BASE/sdr_switch.py"

@@ -46,6 +46,10 @@ from .maint_ui import FeedsMixin, MaintMixin
 from .radiosonde_ui import RadiosondeMixin
 from .mission_ui import MissionMixin
 from .meteor_ui import MeteorMixin
+from .noise_ui import NoiseMixin
+from .wx433_ui import Wx433Mixin
+from .aprsmsg_ui import AprsMsgMixin
+from .profiles_ui import ProfilesMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -103,7 +107,7 @@ HOME_TILES = [
     ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
     ("pocsag", "POCSAG", "Radiomessagerie · DAPNET 439,9875"),
     ("radiosonde", "Radiosondes", "Ballons météo · 400–406 MHz"),
-    ("meteor", "Météo satellite", "Images Meteor-M · 137,9 MHz"),
+    ("meteor", "Images satellites", "Meteor-M · SSTV de l'ISS"),
     ("mission", "Mission / Exercice", "Veille, goniométrie, compte rendu"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
@@ -130,7 +134,7 @@ MODULE_SDR_MODE = {
     "radiosonde": "radiosonde",
 }
 SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Satellite Meteor", "off": "arrêtée"}
+                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -703,7 +707,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, NoiseMixin, Wx433Mixin, AprsMsgMixin, ProfilesMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -751,6 +755,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.after(200, self._check_update_on_startup)
         self.after(90 * 1000, self._auto_backup_tick)
         self._start_refresh_loop()
+        self.after(1500, self._aprsmsg_init)
 
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
         self._tray_icon = None
@@ -995,6 +1000,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         self.chip_host = theme.chip(strip, f"Hôte {self.config_data.get('pi_host', '?')}")
         self.chip_host.pack(side="left", padx=(0, 8))
+        self._profiles_bind_chip()
         self.chip_aircraft = theme.chip(strip, "Avions : —")
         self.chip_aircraft.pack(side="left", padx=8)
         self.chip_services = theme.chip(strip, "Services : —")
@@ -1510,8 +1516,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.weather_overlay_label.pack(anchor="w", pady=(4, 0))
         self._build_vigilance_card(left_col)
 
-        map_outer = theme.card(wrapper)
-        map_outer.pack(side="left", fill="both", expand=True, pady=12, padx=(0, 12))
+        right_col = tk.Frame(wrapper, bg=theme.BG)
+        right_col.pack(side="left", fill="both", expand=True, pady=(4, 12), padx=(0, 12))
+        self._build_wx433_card(right_col)
+        map_outer = theme.card(right_col)
+        map_outer.pack(fill="both", expand=True, pady=(8, 0))
         self.weather_map = self._make_map(map_outer.inner)
         self.weather_map.pack(fill="both", expand=True, padx=1, pady=1)
         lat, lon = DEFAULT_COORDS
@@ -1639,7 +1648,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         if "weather" in self.tile_chips:
             temp = data.get("temperature_c")
-            self.tile_chips["weather"].config(text=f"{_fmt(temp)} °C" if temp is not None else "—")
+            garden = getattr(self, "_wx4_garden", None)
+            self.tile_chips["weather"].config(text=(f"{_fmt(temp)} °C" if temp is not None else "—")
+                                              + (f"  ·  jardin {garden}" if garden else ""))
 
         if station != self._weather_map_station:
             lat, lon = STATION_COORDS.get(station, DEFAULT_COORDS)
@@ -2368,6 +2379,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                    command=lambda: self._open_url(f"http://{self.config_data.get('lora_igate_host', '192.168.1.154')}/")
                    ).pack(side="right")
         ttk.Button(r1, text="Adresse…", style="Flat.TButton", command=self._lora_set_host).pack(side="right", padx=(0, 6))
+        self.aprsmsg_btn = ttk.Button(r1, text="Messages APRS…", style="Accent.TButton", command=self._open_aprsmsg)
+        self.aprsmsg_btn.pack(side="right", padx=(0, 6))
         self.lora_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, anchor="w")
         self.lora_info.pack(anchor="w", pady=(2, 8))
         r2 = tk.Frame(st, bg=theme.BG_CARD)
@@ -3929,6 +3942,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.stats_status = tk.Label(bar, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.stats_status.pack(side="left", padx=(16, 0))
         ttk.Button(bar, text="Actualiser", style="Flat.TButton", command=self._fetch_stats_async).pack(side="right")
+        ttk.Button(bar, text="Bruit radio…", style="Flat.TButton", command=self._open_noise_window).pack(
+            side="right", padx=6)
 
         body = tk.Frame(wrapper, bg=theme.BG)
         body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -5983,7 +5998,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         )
         if host:
             self.config_data["pi_host"] = host.strip()
-            self.chip_host.config(text=f"Hôte {self.config_data['pi_host']}")
+            self._profile_current()["pi_host"] = host.strip()
+            self.chip_host.config(text=self._profile_chip_text())
 
         token = simpledialog.askstring(
             "Paramètres",

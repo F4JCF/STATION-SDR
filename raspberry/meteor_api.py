@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Images des satellites météo russes Meteor-M (N2-3, N2-4) en LRPT, 137,9 MHz.
+Satellites : images Meteor-M (LRPT, 137,9 MHz), images SSTV de l'ISS
+(145,800 MHz, événements ARISS) et relevé quotidien du bruit radio.
 
 Ce service tourne en permanence (il ne tient pas la clé SDR) :
   - il calcule les passages au-dessus de la station (éléments CelesTrak, SGP4) ;
@@ -15,8 +16,11 @@ Port METEOR_PORT (5013) :
   GET  /api/meteor/images          images (plus récentes d'abord)
   GET  /api/meteor/image/<nom>     image complète (PNG)
   GET  /api/meteor/thumb/<nom>     vignette (JPEG)
-  POST /api/meteor/config          {"enabled", "min_el", "gain"}
+  POST /api/meteor/config          {"enabled", "min_el", "gain", "sstv_enabled", "sstv_until",
+                                    "sstv_min_el", "noise_enabled", "noise_time"}
   POST /api/meteor/delete/<nom>    supprime une image
+  GET  /api/meteor/noise           historique des relevés de bruit
+  POST /api/meteor/noise/run       relevé de bruit dès que possible
 """
 
 import json
@@ -40,15 +44,29 @@ CONF_FILE = os.path.join(DATA, "config.json")
 TLE_FILE = os.path.join(DATA, "tle.json")
 JOB_FILE = "/run/meteor/job.json"
 SWITCH = "http://127.0.0.1:5006"
-SATS = {57166: "Meteor-M N2-3", 59051: "Meteor-M N2-4"}
+SATS = {57166: "Meteor-M N2-3", 59051: "Meteor-M N2-4", 25544: "ISS"}
+ISS = 25544
+NOISE_FILE = os.path.join(DATA, "noise.json")
+NOISE_BANDS = [("Aviation 118-137", 118, 137), ("2 m 144-146", 144, 146), ("Marine 156-163", 156, 163),
+               ("400-406", 400, 406), ("70 cm 430-440", 430, 440), ("ADS-B 1090", 1088, 1092)]
 KEEP = 40
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("meteor")
 
 conf = {"enabled": True, "min_el": 25, "gain": 40, "freq_mhz": 137.9, "symrate": 72000, "mode": "oqpsk",
-        "diff": True, "lat": 43.590541, "lon": 7.002072, "alt_m": 200}
-state = {"passes": [], "current": None, "last": None, "error": None, "tle_time": None}
+        "diff": True, "lat": 43.590541, "lon": 7.002072, "alt_m": 200,
+        "sstv_enabled": False, "sstv_until": "", "sstv_min_el": 15, "sstv_freq_mhz": 145.8,
+        "noise_enabled": True, "noise_time": "03:30", "noise_gain": 30}
+state = {"passes": [], "current": None, "last": None, "error": None, "tle_time": None,
+         "noise_request": False, "last_noise_day": None}
+
+
+def sstv_active():
+    if conf.get("sstv_enabled"):
+        return True
+    until = conf.get("sstv_until") or ""
+    return bool(until) and time.strftime("%Y-%m-%d") <= until
 
 RE_KM = 6378.137
 F_WGS = 1 / 298.257223563
@@ -143,6 +161,7 @@ def compute_passes(hours=24):
                 break
             if prev is not None and prev[1] < 0 <= lk[1]:
                 cur = {"sat": SATS.get(int(catnr), catnr), "catnr": int(catnr), "aos": t, "max_el": lk[1],
+                       "kind": "sstv" if int(catnr) == ISS else "lrpt",
                        "max_t": t, "aos_lat": lk[2], "aos_az": lk[0]}
             if cur is not None and lk[1] > cur["max_el"]:
                 cur.update(max_el=lk[1], max_t=t, max_az=lk[0])
@@ -172,23 +191,18 @@ def sdr_switch(mode):
         return json.loads(r.read().decode())
 
 
-def run_pass(p):
-    """Réception d'un passage : prépare la tâche, donne la clé, attend la
-    fin et le décodage, puis rend la clé au module précédent."""
+def run_job(job, info):
+    """Donne la clé au module « meteor » pour la tâche `job`, attend la fin
+    (et le décodage), puis rend la clé au module précédent."""
     try:
         prev = sdr_mode()
     except Exception as exc:
         state["error"] = f"bascule de clé injoignable : {exc}"
-        return
+        return None
     if prev in ("elt121", "off"):
-        log.info("Passage %s ignoré : clé %s", p["sat"], prev)
-        state["last"] = {**p, "result": "ignoré (veille 121,5 ou clé arrêtée)"}
-        return
-    stamp = time.strftime("%Y%m%d-%H%M", time.localtime(p["aos"]))
-    name = f"{stamp}_{p['sat'].split()[-1]}"
-    job = {"name": name, "sat": p["sat"], "los": p["los"] + 15, "freq_mhz": conf["freq_mhz"],
-           "gain": conf["gain"], "symrate": conf["symrate"], "mode": conf["mode"], "diff": conf["diff"],
-           "northbound": p.get("northbound"), "out_dir": IMG_DIR, "max_el": p["max_el"], "aos": p["aos"]}
+        log.info("Tâche %s ignorée : clé %s", job["name"], prev)
+        state["last"] = {**info, "name": job["name"], "result": "ignoré (veille 121,5 ou clé arrêtée)"}
+        return None
     os.makedirs(os.path.dirname(JOB_FILE), exist_ok=True)
     try:
         os.remove(JOB_FILE + ".done")
@@ -196,14 +210,15 @@ def run_pass(p):
         pass
     with open(JOB_FILE, "w", encoding="utf-8") as f:
         json.dump(job, f)
-    state["current"] = {**p, "name": name, "prev_mode": prev}
-    log.info("Passage %s (élévation max %.0f°) : clé prise à %s", p["sat"], p["max_el"], prev)
+    state["current"] = {**info, "name": job["name"], "prev_mode": prev}
+    log.info("Tâche %s : clé prise à %s", job["name"], prev)
+    res = None
     try:
         sdr_switch("meteor")
-        while time.time() < p["los"] + 15:
+        while time.time() < job["los"] and not os.path.exists(JOB_FILE + ".done"):
             time.sleep(5)
-        # Laisse meteor-rx finir le décodage (il écrit job_done)
-        for _ in range(60):
+        # Laisse meteor-rx finir le décodage (il écrit .done)
+        for _ in range(90):
             if os.path.exists(JOB_FILE + ".done"):
                 break
             time.sleep(2)
@@ -213,7 +228,6 @@ def run_pass(p):
                 sdr_switch(prev)
         except Exception as exc:
             log.warning("Retour de la clé à %s impossible : %s", prev, exc)
-        res = None
         try:
             with open(JOB_FILE + ".done", encoding="utf-8") as f:
                 res = json.load(f)
@@ -221,8 +235,46 @@ def run_pass(p):
         except (OSError, ValueError):
             pass
         state["current"] = None
-        state["last"] = {**p, "name": name, "result": (res or {}).get("result", "pas de résultat")}
+        state["last"] = {**info, "name": job["name"], "result": (res or {}).get("result", "pas de résultat")}
         prune()
+    return res
+
+
+def run_pass(p):
+    stamp = time.strftime("%Y%m%d-%H%M", time.localtime(p["aos"]))
+    if p.get("kind") == "sstv":
+        name = f"{stamp}_ISS"
+        job = {"kind": "sstv", "name": name, "sat": p["sat"], "los": p["los"] + 10,
+               "freq_mhz": conf["sstv_freq_mhz"], "gain": conf["gain"], "out_dir": IMG_DIR,
+               "max_el": p["max_el"], "aos": p["aos"]}
+    else:
+        name = f"{stamp}_{p['sat'].split()[-1]}"
+        job = {"kind": "lrpt", "name": name, "sat": p["sat"], "los": p["los"] + 15, "freq_mhz": conf["freq_mhz"],
+               "gain": conf["gain"], "symrate": conf["symrate"], "mode": conf["mode"], "diff": conf["diff"],
+               "northbound": p.get("northbound"), "out_dir": IMG_DIR, "max_el": p["max_el"], "aos": p["aos"]}
+    log.info("Passage %s (élévation max %.0f°)", p["sat"], p["max_el"])
+    run_job(job, p)
+
+
+def run_noise():
+    job = {"kind": "noise", "name": time.strftime("bruit-%Y%m%d-%H%M"), "sat": "bruit", "los": time.time() + 600,
+           "gain": conf["noise_gain"], "bands": NOISE_BANDS}
+    run_job(job, {"sat": "Relevé du bruit", "kind": "noise", "aos": time.time()})
+    state["last_noise_day"] = time.strftime("%Y-%m-%d")
+
+
+def noise_due(now):
+    if state["noise_request"]:
+        return True
+    if not conf.get("noise_enabled") or state["last_noise_day"] == time.strftime("%Y-%m-%d"):
+        return False
+    return time.strftime("%H:%M") >= (conf.get("noise_time") or "03:30")
+
+
+def wanted(p):
+    if p.get("kind") == "sstv":
+        return sstv_active() and p["max_el"] >= conf["sstv_min_el"]
+    return conf["enabled"] and p["max_el"] >= conf["min_el"]
 
 
 def prune():
@@ -230,12 +282,22 @@ def prune():
         pngs = sorted(f for f in os.listdir(IMG_DIR) if f.endswith(".png"))
     except OSError:
         return
-    for old in pngs[:-KEEP]:
+    sstv = [f for f in pngs if "_ISS" in f]
+    lrpt = [f for f in pngs if "_ISS" not in f]
+    for old in lrpt[:-KEEP] + sstv[:-KEEP]:
         for ext in (".png", ".jpg", ".json"):
             try:
                 os.remove(os.path.join(IMG_DIR, old[:-4] + ext))
             except OSError:
                 pass
+
+
+def noise_history():
+    try:
+        with open(NOISE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
 
 
 def scheduler():
@@ -254,10 +316,16 @@ def scheduler():
                 state["error"] = None
             now = time.time()
             for p in state["passes"]:
-                if conf["enabled"] and p["max_el"] >= conf["min_el"] and p["aos"] - 30 <= now < p["los"] - 60:
+                if wanted(p) and p["aos"] - 30 <= now < p["los"] - 60:
                     run_pass(p)
                     last_calc = 0
                     break
+            else:
+                # Relevé du bruit : seulement si aucun passage voulu dans les 15 min
+                if noise_due(now) and not any(wanted(p) and p["aos"] - now < 900 and p["los"] > now
+                                              for p in state["passes"]):
+                    state["noise_request"] = False
+                    run_noise()
         except Exception as exc:
             state["error"] = str(exc)
             log.exception("Planification")
@@ -293,7 +361,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path.rstrip("/")
         if path == "/api/meteor/status":
-            self._send(200, {**state, "config": conf, "passes": state["passes"][:12]})
+            passes = [{**p, "wanted": wanted(p)} for p in state["passes"]]
+            self._send(200, {**state, "config": conf, "passes": passes[:16], "sstv_active": sstv_active(),
+                             "noise_last": (noise_history() or [None])[-1]})
+        elif path == "/api/meteor/noise":
+            self._send(200, {"bands": [b[0] for b in NOISE_BANDS], "history": noise_history()})
         elif path == "/api/meteor/images":
             self._send(200, images())
         elif path.startswith(("/api/meteor/image/", "/api/meteor/thumb/")):
@@ -322,11 +394,29 @@ class Handler(BaseHTTPRequestHandler):
                     conf["min_el"] = max(5, min(80, float(body["min_el"])))
                 if "gain" in body:
                     conf["gain"] = max(0.0, min(49.6, float(body["gain"])))
+                for key in ("sstv_enabled", "noise_enabled"):
+                    if key in body:
+                        conf[key] = bool(body[key])
+                if "sstv_min_el" in body:
+                    conf["sstv_min_el"] = max(5, min(80, float(body["sstv_min_el"])))
+                if "sstv_until" in body:
+                    v = str(body["sstv_until"] or "").strip()
+                    if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                        raise ValueError("date attendue au format AAAA-MM-JJ")
+                    conf["sstv_until"] = v
+                if "noise_time" in body:
+                    v = str(body["noise_time"]).strip()
+                    if not re.fullmatch(r"[0-2]\d:[0-5]\d", v):
+                        raise ValueError("heure attendue au format HH:MM")
+                    conf["noise_time"] = v
             except (ValueError, TypeError) as exc:
                 self._send(400, {"error": str(exc)})
                 return
             save_conf()
             self._send(200, {"ok": True, "config": conf})
+        elif path == "/api/meteor/noise/run":
+            state["noise_request"] = True
+            self._send(200, {"ok": True, "message": "relevé programmé (dans la minute, hors passage)"})
         elif path.startswith("/api/meteor/delete/"):
             name = path.rsplit("/", 1)[-1]
             if re.fullmatch(r"[\w.-]+", name):
@@ -346,5 +436,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_conf()
     os.makedirs(IMG_DIR, exist_ok=True)
+    hist = noise_history()
+    if hist:
+        state["last_noise_day"] = time.strftime("%Y-%m-%d", time.localtime(hist[-1]["time"]))
     threading.Thread(target=scheduler, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

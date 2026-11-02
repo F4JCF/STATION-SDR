@@ -1,7 +1,10 @@
-"""Page « Météo satellite » : images LRPT des satellites Meteor-M reçues
-automatiquement par le Pi pendant leurs passages (service meteor-api)."""
+"""Page « Satellites » : images LRPT des satellites Meteor-M et images SSTV
+de l'ISS (événements ARISS), reçues automatiquement par le Pi pendant les
+passages (service meteor-api)."""
 
+import datetime
 import io
+import webbrowser
 import threading
 import time
 import tkinter as tk
@@ -26,16 +29,17 @@ class MeteorMixin:
         h.configure(padding=12)
         r = tk.Frame(h, bg=theme.BG_CARD)
         r.pack(fill="x")
-        tk.Label(r, text="Images satellites Meteor-M (137,9 MHz)", bg=theme.BG_CARD, fg=theme.TEXT,
-                 font=theme.FONT_SECTION).pack(side="left")
+        tk.Label(r, text="Images satellites : Meteor-M (137,9 MHz) et SSTV de l'ISS (145,800 MHz)", bg=theme.BG_CARD,
+                 fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
         self.mt_pill = theme.pill(r, "INCONNU", theme.MUTED)
         self.mt_pill.pack(side="left", padx=(12, 0))
         self.mt_info = tk.Label(r, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.mt_info.pack(side="left", padx=12)
+        ttk.Button(r, text="Bruit radio…", style="Flat.TButton", command=self._open_noise_window).pack(side="right")
         r2 = tk.Frame(h, bg=theme.BG_CARD)
         r2.pack(fill="x", pady=(8, 0))
         self.mt_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(r2, text="Réception automatique pendant les passages", variable=self.mt_enabled,
+        tk.Checkbutton(r2, text="Meteor-M : réception automatique", variable=self.mt_enabled,
                        bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
                        activeforeground=theme.TEXT, font=theme.FONT_BODY, highlightthickness=0).pack(side="left")
         tk.Label(r2, text="Élévation minimale :", bg=theme.BG_CARD, fg=theme.MUTED,
@@ -47,8 +51,26 @@ class MeteorMixin:
         ttk.Combobox(r2, textvariable=self.mt_gain, width=5, values=("30", "35", "40", "45", "49.6")).pack(
             side="left", padx=4)
         ttk.Button(r2, text="Appliquer", style="Flat.TButton", command=self._mt_apply).pack(side="left", padx=8)
+        r3 = tk.Frame(h, bg=theme.BG_CARD)
+        r3.pack(fill="x", pady=(6, 0))
+        self.mt_sstv = tk.BooleanVar(value=False)
+        tk.Checkbutton(r3, text="SSTV de l'ISS : toujours", variable=self.mt_sstv,
+                       bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+                       activeforeground=theme.TEXT, font=theme.FONT_BODY, highlightthickness=0).pack(side="left")
+        tk.Label(r3, text="ou jusqu'au (inclus) :", bg=theme.BG_CARD, fg=theme.MUTED,
+                 font=theme.FONT_SUBTITLE).pack(side="left", padx=(12, 4))
+        self.mt_sstv_until = tk.StringVar(value="")
+        ttk.Entry(r3, textvariable=self.mt_sstv_until, width=11).pack(side="left")
+        tk.Label(r3, text="(JJ/MM/AAAA)   Élévation min. ISS :", bg=theme.BG_CARD, fg=theme.MUTED,
+                 font=theme.FONT_SUBTITLE).pack(side="left", padx=(4, 4))
+        self.mt_sstv_minel = tk.StringVar(value="15")
+        ttk.Combobox(r3, textvariable=self.mt_sstv_minel, width=4, values=("10", "15", "20", "30")).pack(side="left")
+        tk.Label(r3, text="°", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(side="left")
+        ttk.Button(r3, text="Calendrier ARISS", style="Flat.TButton",
+                   command=lambda: webbrowser.open("https://www.ariss.org/")).pack(side="left", padx=8)
         tk.Label(h, text=("Pendant un passage retenu (environ 10 min), la clé SDR passe sur le satellite puis revient "
-                          "seule au module précédent. La veille 121,5 MHz n'est jamais interrompue."),
+                          "seule au module précédent. La veille 121,5 MHz n'est jamais interrompue. L'ISS n'émet en "
+                          "SSTV que pendant les événements ARISS annoncés : indiquez la date de fin de l'événement."),
                  bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(6, 0))
 
         body = tk.Frame(outer, bg=theme.BG)
@@ -72,8 +94,15 @@ class MeteorMixin:
 
         right = tk.Frame(body, bg=theme.BG)
         right.pack(side="left", fill="both", expand=True, padx=(12, 0))
-        tk.Label(right, text="Images reçues (clic : ouvrir)", bg=theme.BG, fg=theme.TEXT,
-                 font=theme.FONT_SECTION).pack(anchor="w", pady=(0, 4))
+        gh = tk.Frame(right, bg=theme.BG)
+        gh.pack(fill="x", pady=(0, 4))
+        tk.Label(gh, text="Images reçues (clic : ouvrir)", bg=theme.BG, fg=theme.TEXT,
+                 font=theme.FONT_SECTION).pack(side="left")
+        self.mt_filter = tk.StringVar(value="all")
+        for val, txt in (("sstv", "SSTV ISS"), ("lrpt", "Meteor"), ("all", "Toutes")):
+            tk.Radiobutton(gh, text=txt, value=val, variable=self.mt_filter, command=self._mt_draw_gallery,
+                           bg=theme.BG, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG,
+                           activeforeground=theme.TEXT, font=theme.FONT_BODY, highlightthickness=0).pack(side="right")
         gc = theme.card(right)
         gc.pack(fill="both", expand=True)
         self.mt_gallery = tk.Frame(gc.inner, bg=theme.BG_CARD)
@@ -100,7 +129,7 @@ class MeteorMixin:
         try:
             st = requests.get(base + "/api/meteor/status", timeout=6).json()
             imgs = requests.get(base + "/api/meteor/images", timeout=6).json()
-            for im in imgs[:12]:
+            for im in [i for i in imgs if i.get("kind") == "sstv"][:12] + [i for i in imgs if i.get("kind") != "sstv"][:12]:
                 if im["name"] not in self._mt_thumbs:
                     r = requests.get(f"{base}/api/meteor/thumb/{im['name']}", timeout=15)
                     if r.status_code == 200:
@@ -116,7 +145,7 @@ class MeteorMixin:
             return
         if err:
             self.mt_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
-            self.mt_info.config(text="Installez le module : Santé du Pi → « Modules du Pi… » → Images satellites Meteor-M.")
+            self.mt_info.config(text="Installez le module : Santé du Pi → « Modules du Pi… » → Images satellites.")
             return
         cfg = st.get("config") or {}
         if not self._mt_conf_loaded:
@@ -124,13 +153,24 @@ class MeteorMixin:
             self.mt_enabled.set(bool(cfg.get("enabled", True)))
             self.mt_minel.set(f"{cfg.get('min_el', 25):g}")
             self.mt_gain.set(f"{cfg.get('gain', 40):g}")
+            self.mt_sstv.set(bool(cfg.get("sstv_enabled")))
+            until = cfg.get("sstv_until") or ""
+            try:
+                until = datetime.date.fromisoformat(until).strftime("%d/%m/%Y") if until else ""
+            except ValueError:
+                pass
+            self.mt_sstv_until.set(until)
+            self.mt_sstv_minel.set(f"{cfg.get('sstv_min_el', 15):g}")
+            if "sstv_enabled" not in cfg:
+                self.mt_info.config(text="Mettez à jour le Pi pour recevoir la SSTV de l'ISS.")
         cur = st.get("current")
         if cur:
             self.mt_pill.config(text="  RÉCEPTION EN COURS  ", bg=theme.ORANGE)
             self.mt_info.config(text=f"{cur['sat']} jusqu'à {time.strftime('%H:%M', time.localtime(cur['los']))}")
         else:
-            on = cfg.get("enabled", True)
-            self.mt_pill.config(text="  AUTOMATIQUE  " if on else "  DÉSACTIVÉ  ", bg=theme.GREEN if on else theme.MUTED)
+            on = cfg.get("enabled", True) or st.get("sstv_active")
+            self.mt_pill.config(text=("  AUTOMATIQUE · SSTV ISS  " if st.get("sstv_active") else "  AUTOMATIQUE  ")
+                                if on else "  DÉSACTIVÉ  ", bg=theme.GREEN if on else theme.MUTED)
             last = st.get("last")
             self.mt_info.config(text=(f"Dernier passage : {last['sat']} à "
                                       f"{time.strftime('%H:%M', time.localtime(last['aos']))} — {last.get('result')}")
@@ -138,19 +178,33 @@ class MeteorMixin:
         tree = self.mt_tree
         tree.delete(*tree.get_children())
         minel = float(cfg.get("min_el", 25))
+
+        def is_ok(p):
+            if "wanted" in p:
+                return p["wanted"]
+            return p["max_el"] >= minel and cfg.get("enabled", True) and p.get("kind") != "sstv"
+
         for i, p in enumerate(st.get("passes") or []):
-            ok = p["max_el"] >= minel and cfg.get("enabled", True)
+            ok = is_ok(p)
+            if ok:
+                why = "sera reçu"
+            elif p.get("kind") == "sstv" and not st.get("sstv_active"):
+                why = "hors ARISS"
+            else:
+                why = "trop bas" if p["max_el"] < (cfg.get("sstv_min_el", 15) if p.get("kind") == "sstv" else minel) \
+                    else "désactivé"
             tree.insert("", "end", iid=str(i), tags=("ok",) if ok else ("low",), values=(
-                p["sat"].replace("Meteor-M ", ""),
+                "ISS (SSTV)" if p.get("kind") == "sstv" else p["sat"].replace("Meteor-M ", ""),
                 ("lun", "mar", "mer", "jeu", "ven", "sam", "dim")[time.localtime(p["aos"]).tm_wday]
                 + time.strftime(" %H:%M", time.localtime(p["aos"])),
                 f"{(p['los'] - p['aos']) / 60:.0f} min", f"{p['max_el']:.0f}°",
-                "S → N" if p.get("northbound") else "N → S", "sera reçu" if ok else "trop bas"))
-        nxt = next((p for p in st.get("passes") or [] if p["max_el"] >= minel), None)
+                "S → N" if p.get("northbound") else "N → S", why))
+        nxt = next((p for p in st.get("passes") or [] if is_ok(p)), None)
         if "meteor" in self.tile_chips:
             self.tile_chips["meteor"].config(
-                text=f"prochain : {time.strftime('%H:%M', time.localtime(nxt['aos']))} ({nxt['max_el']:.0f}°)"
-                if nxt and cfg.get("enabled", True) else f"{len(imgs or [])} image(s)")
+                text=(f"{'ISS' if nxt.get('kind') == 'sstv' else 'Meteor'} "
+                      f"{time.strftime('%H:%M', time.localtime(nxt['aos']))} ({nxt['max_el']:.0f}°)")
+                if nxt else f"{len(imgs or [])} image(s)")
         self._mt_images = imgs or []
         self._mt_draw_gallery()
 
@@ -158,12 +212,15 @@ class MeteorMixin:
         g = self.mt_gallery
         for w in g.winfo_children():
             w.destroy()
-        if not self._mt_images:
+        flt = self.mt_filter.get() if hasattr(self, "mt_filter") else "all"
+        shown = [im for im in self._mt_images
+                 if flt == "all" or (im.get("kind") == "sstv") == (flt == "sstv")][:12]
+        if not shown:
             tk.Label(g, text="Pas encore d'image : elles arrivent après le premier passage retenu.",
                      bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY).pack(anchor="w")
             return
         self._mt_photo = []
-        for i, im in enumerate(self._mt_images[:12]):
+        for i, im in enumerate(shown):
             cell = tk.Frame(g, bg=theme.BG_CARD_ALT, cursor="hand2")
             cell.grid(row=i // 6, column=i % 6, padx=4, pady=4, sticky="n")
             data = self._mt_thumbs.get(im["name"])
@@ -178,8 +235,14 @@ class MeteorMixin:
                     lab.bind("<Button-1>", lambda _e, n=im["name"]: self._mt_open(n))
                 except Exception:
                     pass
-            t = tk.Label(cell, text=(f"{time.strftime('%d/%m %H:%M', time.localtime(im['aos']))}\n"
-                                     f"{im['sat'].replace('Meteor-M ', '')} · {im['max_el']:.0f}° · {im['lines']} l."),
+            if im.get("kind") == "sstv":
+                when = im.get("rx_time") or im["aos"]
+                txt = (f"ISS · {time.strftime('%d/%m %H:%M', time.localtime(when))}\n"
+                       f"{im.get('mode', 'SSTV')} · {'complète' if im.get('complete') else 'partielle'}")
+            else:
+                txt = (f"{time.strftime('%d/%m %H:%M', time.localtime(im['aos']))}\n"
+                       f"{im['sat'].replace('Meteor-M ', '')} · {im['max_el']:.0f}° · {im['lines']} l.")
+            t = tk.Label(cell, text=txt,
                          bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", 8), justify="center")
             t.pack(pady=(2, 4))
             t.bind("<Button-1>", lambda _e, n=im["name"]: self._mt_open(n))
@@ -198,10 +261,10 @@ class MeteorMixin:
 
         def show(data, err):
             if err:
-                messagebox.showwarning("Meteor", f"Image indisponible : {err}")
+                messagebox.showwarning("Satellites", f"Image indisponible : {err}")
                 return
             win = tk.Toplevel(self)
-            win.title(f"Meteor — {name}")
+            win.title(f"Satellites — {name}")
             win.configure(bg=theme.BG)
             win.geometry("900x900")
             bar = tk.Frame(win, bg=theme.BG)
@@ -215,7 +278,7 @@ class MeteorMixin:
                         f.write(data)
 
             def delete():
-                if messagebox.askyesno("Meteor", "Supprimer cette image du Pi ?", parent=win):
+                if messagebox.askyesno("Satellites", "Supprimer cette image du Pi ?", parent=win):
                     try:
                         requests.post(f"{base}/api/meteor/delete/{name}", timeout=10)
                     except Exception:
@@ -249,9 +312,25 @@ class MeteorMixin:
     def _mt_apply(self):
         try:
             cfg = {"enabled": bool(self.mt_enabled.get()), "min_el": float(self.mt_minel.get().replace(",", ".")),
-                   "gain": float(self.mt_gain.get().replace(",", "."))}
+                   "gain": float(self.mt_gain.get().replace(",", ".")), "sstv_enabled": bool(self.mt_sstv.get()),
+                   "sstv_min_el": float(self.mt_sstv_minel.get().replace(",", "."))}
+            until = self.mt_sstv_until.get().strip()
+            if until:
+                d = None
+                for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y"):
+                    try:
+                        d = datetime.datetime.strptime(until, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                if d is None:
+                    raise ValueError("date")
+                cfg["sstv_until"] = d.isoformat()
+                self.mt_sstv_until.set(d.strftime("%d/%m/%Y"))
+            else:
+                cfg["sstv_until"] = ""
         except ValueError:
-            messagebox.showwarning("Meteor", "Valeurs invalides.")
+            messagebox.showwarning("Satellites", "Valeurs invalides (date au format JJ/MM/AAAA).")
             return
         base = self._mt_base()
 
@@ -262,7 +341,7 @@ class MeteorMixin:
             except Exception as exc:
                 err = str(exc)
             if err:
-                self.after(0, lambda: messagebox.showwarning("Meteor", f"Réglage refusé : {err}"))
+                self.after(0, lambda: messagebox.showwarning("Satellites", f"Réglage refusé : {err}"))
             self._mt_fetch()
 
         threading.Thread(target=worker, daemon=True).start()
