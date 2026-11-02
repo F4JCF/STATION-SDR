@@ -455,7 +455,7 @@ def aprs_is_send(call: str, lines: list) -> None:
     with socket.create_connection(APRS_IS, timeout=20) as sk:
         sk.settimeout(20)
         sk.recv(512)
-        sk.sendall(f"user {call} pass {aprs_passcode(call)} vers STATION-SDR 1.31\r\n".encode())
+        sk.sendall(f"user {call} pass {aprs_passcode(call)} vers STATION-SDR 1.32\r\n".encode())
         resp = b""
         end = time.time() + 8
         while b"logresp" not in resp and time.time() < end:

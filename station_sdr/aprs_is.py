@@ -107,7 +107,7 @@ class AprsMessenger:
                 self._sock = sk
                 f = sk.makefile("r", encoding="latin-1", newline="\n")
                 f.readline()
-                login = (f"user {self.call} pass {passcode(self.call)} vers STATION-SDR 1.31 "
+                login = (f"user {self.call} pass {passcode(self.call)} vers STATION-SDR 1.32 "
                          f"filter g/{self.call.split('-')[0]}*\r\n")
                 sk.sendall(login.encode())
                 verified = None
