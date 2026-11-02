@@ -1,0 +1,39 @@
+name: Diagnostic Linux ARM (sans publication)
+
+# Lancé à la main : compile et démarre l'appli sur ARM 64 bits sous Xvfb,
+# avec la trace des fils en cas de plantage. Ne publie rien.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtk8.6 libtcl8.6 tk-dev xvfb gdb
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Depuis les sources (40 s)
+        run: |
+          set +e
+          PYTHONFAULTHANDLER=1 timeout 40 xvfb-run -a python -X faulthandler run.py 2>&1 | tail -80
+          echo "code=${PIPESTATUS[0]}"
+      - name: Exécutable (40 s)
+        run: |
+          pyinstaller --onefile --windowed --name STATION-SDR \
+            --add-data "station_sdr/assets/logo.png:assets" \
+            --add-data "station_sdr/assets/icon.ico:assets" \
+            --add-data "station_sdr/assets/flags.json:assets" \
+            --hidden-import PIL._tkinter_finder \
+            --collect-all tkintermapview --collect-all PIL run.py >/dev/null 2>&1
+          set +e
+          timeout 40 xvfb-run -a dist/STATION-SDR 2>&1 | tail -80
+          echo "code=${PIPESTATUS[0]}"
