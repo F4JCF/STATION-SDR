@@ -99,7 +99,7 @@ jobs:
         run: |
           set +e
           rm -f /tmp/station_sdr_crash.log
-          timeout 20 xvfb-run -a "dist/STATION-SDR-linux-${{ matrix.arch }}"
+          PYTHONFAULTHANDLER=1 timeout 20 xvfb-run -a "dist/STATION-SDR-linux-${{ matrix.arch }}"
           code=$?
           set -e
           if [ -f /tmp/station_sdr_crash.log ]; then cat /tmp/station_sdr_crash.log; fi
