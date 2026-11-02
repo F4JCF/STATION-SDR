@@ -258,6 +258,13 @@ def distance_bearing(lat1, lon1, lat2, lon2):
     return dist, (math.degrees(math.atan2(y, x)) + 360) % 360
 
 
+# Colonnes ajoutées au fil des versions (modules 433, POCSAG, balises).
+EXTRA_COLS = [("sensors433", "INTEGER"), ("pocsag_msgs", "INTEGER"), ("beacon_frames", "INTEGER"),
+              ("elt_above", "REAL"), ("elt_active", "INTEGER")]
+SERIES_COLS = ["t", "aircraft", "aircraft_pos", "adsb_max_km", "ships", "ais_max_km", "aprs_stations",
+               "temp", "undervolt", "mode", "dongles"] + [c for c, _t in EXTRA_COLS]
+
+
 def db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=10)
@@ -267,6 +274,10 @@ def db():
         mode TEXT, dongles INTEGER)""")
     con.execute("""CREATE TABLE IF NOT EXISTS polar (
         kind TEXT, hour INTEGER, sector INTEGER, max_km REAL, PRIMARY KEY (kind, hour, sector))""")
+    have = {r[1] for r in con.execute("PRAGMA table_info(samples)")}
+    for col, typ in EXTRA_COLS:
+        if col not in have:
+            con.execute(f"ALTER TABLE samples ADD COLUMN {col} {typ}")
     return con
 
 
@@ -317,16 +328,37 @@ def collect_once(state: dict) -> None:
     stations = fetch_json("http://127.0.0.1:5004/api/aprs/stations") or []
     aprs_recent = sum(1 for s in stations if now - (s.get("last_heard") or 0) < 1800) if isinstance(stations, list) else None
 
+    # --- Autres modules (seulement quand ils ont la clé)
+    sensors433 = pocsag_msgs = beacon_frames = elt_above = elt_active = None
+    if mode == "433":
+        devs = fetch_json("http://127.0.0.1:5010/api/433/devices")
+        if isinstance(devs, list):
+            sensors433 = sum(1 for d in devs if now - (d.get("last_seen") or 0) < 1800)
+    elif mode == "pocsag":
+        msgs = fetch_json("http://127.0.0.1:5012/api/pocsag/messages?limit=1000")
+        if isinstance(msgs, list):
+            pocsag_msgs = sum(1 for m in msgs if now - (m.get("time") or 0) < 1800 and not m.get("tech"))
+    elif mode == "beacon":
+        frames = fetch_json("http://127.0.0.1:5009/api/beacon/frames?limit=500")
+        if isinstance(frames, list):
+            beacon_frames = sum(1 for f in frames if not f.get("manual") and now - (f.get("time") or 0) < 3600)
+    elif mode == "elt121":
+        est = fetch_json("http://127.0.0.1:5011/api/elt121/status") or {}
+        if est.get("running"):
+            elt_above = est.get("above_db")
+            elt_active = 1 if est.get("active") else 0
+
     th = health.get("throttled") or {}
     con = db()
     try:
         adsb_max = record_polar(con, "adsb", hour, ac_pos, lat0, lon0) if mode == "adsb" else None
         ais_max = record_polar(con, "ais", hour, ship_pos, lat0, lon0) if mode == "ais" else None
         con.execute(
-            "INSERT OR REPLACE INTO samples VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO samples ({','.join(SERIES_COLS)}) VALUES ({','.join('?' * len(SERIES_COLS))})",
             (now, len(aircraft) if mode == "adsb" else None, len(ac_pos) if mode == "adsb" else None, adsb_max,
-             len(ships) if mode == "ais" else None, ais_max, aprs_recent if mode == "aprs" else None,
-             health.get("cpu_temp_c"), 1 if th.get("under_voltage_now") else 0, mode, health.get("sdr_dongles")),
+             len(ships) if mode == "ais" else None, ais_max, aprs_recent if mode in ("aprs", "iss") else None,
+             health.get("cpu_temp_c"), 1 if th.get("under_voltage_now") else 0, mode, health.get("sdr_dongles"),
+             sensors433, pocsag_msgs, beacon_frames, elt_above, elt_active),
         )
         if now - state.get("last_purge", 0) > 3600:
             limit = now - KEEP_DAYS * 86400
@@ -632,11 +664,11 @@ def series(hours: float) -> dict:
     since = int(time.time() - hours * 3600)
     con = db()
     try:
-        rows = con.execute("SELECT * FROM samples WHERE t >= ? ORDER BY t", (since,)).fetchall()
+        rows = con.execute(f"SELECT {','.join(SERIES_COLS)} FROM samples WHERE t >= ? ORDER BY t",
+                           (since,)).fetchall()
     finally:
         con.close()
-    cols = ["t", "aircraft", "aircraft_pos", "adsb_max_km", "ships", "ais_max_km", "aprs_stations",
-            "temp", "undervolt", "mode", "dongles"]
+    cols = list(SERIES_COLS)
     # Au-delà de 48 h, on regroupe par tranches de 15 min (moins de points à tracer).
     bucket = 900 if hours > 48 else 0
     if bucket:
@@ -648,8 +680,8 @@ def series(hours: float) -> dict:
             def agg(i, fn=max):
                 vals = [x[i] for x in rs if x[i] is not None]
                 return fn(vals) if vals else None
-            merged.append((t, agg(1), agg(2), agg(3), agg(4), agg(5), agg(6),
-                           agg(7), agg(8), rs[-1][9], agg(10, min)))
+            merged.append(tuple([t] + [rs[-1][i] if cols[i] == "mode" else agg(i, min if cols[i] == "dongles" else max)
+                                       for i in range(1, len(cols))]))
         rows = merged
     return {"columns": cols, "rows": rows, "hours": hours}
 

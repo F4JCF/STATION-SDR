@@ -474,7 +474,9 @@ class _LineChart(tk.Canvas):
         if not self.t0 or not self.t1 or self.t1 <= self.t0:
             return
         ymax = max(vals) if vals else 1
-        ymax = max(1, ymax * 1.15)
+        ymax = ymax * 1.15
+        if ymax < 20:  # petites valeurs : graduations entières (0, 1, 2, 3, 4…)
+            ymax = 4 * math.ceil(max(ymax, 1) / 4)
         span = self.t1 - self.t0
 
         def X(t):
@@ -490,7 +492,8 @@ class _LineChart(tk.Canvas):
             v = ymax * i / 4
             y = Y(v)
             self.create_line(left, y, left + pw, y, fill=theme.BORDER, dash=(2, 4))
-            self.create_text(left - 4, y, text=f"{v:.0f}", anchor="e", fill=theme.MUTED, font=("Segoe UI", 8))
+            self.create_text(left - 4, y, text=f"{v:.0f}" if ymax >= 10 else f"{v:g}", anchor="e",
+                             fill=theme.MUTED, font=("Segoe UI", 8))
         fmt = "%H:%M" if span <= 2 * 86400 else "%d/%m"
         for i in range(5):
             t = self.t0 + span * i / 4
@@ -524,7 +527,15 @@ class _PolarChart(tk.Canvas):
         super().__init__(parent, width=size, height=size + 24, bg=theme.BG_CARD, highlightthickness=0)
         self.title, self.color, self.size = title, color, size
         self.sectors = [None] * 36
+        self.bind("<Configure>", self._resize)
         self._draw()
+
+    def _resize(self, e):
+        # La polaire s'adapte à la place disponible (cercle entier visible).
+        new = max(140, min(e.width, e.height - 28))
+        if abs(new - self.size) > 2:
+            self.size = new
+            self._draw()
 
     def set(self, sectors):
         self.sectors = sectors or [None] * 36
@@ -533,7 +544,7 @@ class _PolarChart(tk.Canvas):
     def _draw(self):
         self.delete("all")
         s = self.size
-        cx, cy, r = s / 2, s / 2 + 22, s / 2 - 26
+        cx, cy, r = max(self.winfo_width(), s) / 2, s / 2 + 24, s / 2 - 26
         vals = [v for v in self.sectors if v]
         vmax = max(vals) if vals else 0
         self.create_text(8, 10, anchor="w", fill=theme.TEXT, font=("Segoe UI", 9, "bold"),
@@ -3837,32 +3848,40 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
             ("adsb_max_km", "Portée ADS-B max", "km", "#f0b429"),
             ("ships", "Navires suivis", "", "#3b82f6"),
             ("ais_max_km", "Portée AIS max", "km", "#06b6d4"),
-            ("aprs_stations", "Stations APRS (30 dernières min)", "", "#22c55e"),
+            ("aprs_stations", "Stations APRS VHF (30 dernières min)", "", "#22c55e"),
+            ("sensors433", "Capteurs 433 MHz actifs (30 min)", "", "#a3e635"),
+            ("pocsag_msgs", "Messages POCSAG (30 dernières min)", "", "#c084fc"),
+            ("beacon_frames", "Trames balises 406 (dernière heure)", "", "#ef4444"),
+            ("elt_above", "Veille 121,5 : niveau (rouge = sirène)", "dB", "#fb923c"),
+            ("aircraft_pos", "Avions avec position", "", "#fdba74"),
+            ("dongles", "Clés SDR vues sur l'USB (0 = décrochée)", "", "#94a3b8"),
             ("temp", "Température CPU (rouge = sous-tension)", "°C", "#f472b6"),
         )
         self.stats_charts = {}
+        ncols = 3
         for i, (key, title, unit, color) in enumerate(specs):
-            r, c = divmod(i, 2)
+            r, c = divmod(i, ncols)
             charts.grid_columnconfigure(c, weight=1, uniform="ch")
-            charts.grid_rowconfigure(r, weight=1)
+            charts.grid_rowconfigure(r, weight=1, uniform="row")
             outer = theme.card(charts)
             outer.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
-            ch = _LineChart(outer.inner, title, unit, color, height=180)
+            ch = _LineChart(outer.inner, title, unit, color, height=120)
             ch.pack(fill="both", expand=True, padx=6, pady=6)
             self.stats_charts[key] = ch
 
-        side = tk.Frame(body, bg=theme.BG)
+        side = tk.Frame(body, bg=theme.BG, width=330)
         side.pack(side="left", fill="y", padx=(8, 0))
+        side.pack_propagate(False)
+        self.stats_share = tk.Label(side, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+                                    justify="left", wraplength=320)
+        self.stats_share.pack(side="bottom", anchor="w", pady=(6, 0))
         self.stats_polars = {}
         for kind, title, color in (("adsb", "Polaire de portée ADS-B", "#f0b429"), ("ais", "Polaire de portée AIS", "#06b6d4")):
             outer = theme.card(side)
-            outer.pack(fill="x", pady=4)
+            outer.pack(fill="both", expand=True, pady=4)
             p = _PolarChart(outer.inner, title, color, size=300)
-            p.pack(padx=6, pady=6)
+            p.pack(fill="both", expand=True, padx=6, pady=6)
             self.stats_polars[kind] = p
-        self.stats_share = tk.Label(side, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                    justify="left", wraplength=320)
-        self.stats_share.pack(anchor="w", pady=(6, 0))
         self._stats_poll_running = False
         self._stats_set_period(24, fetch=False)
 
@@ -3914,8 +3933,14 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
         t1 = time.time()
         t0 = t1 - ser.get("hours", self.stats_hours) * 3600
         notes = {"aircraft": "ADS-B n'a pas eu la clé sur la période", "adsb_max_km": "ADS-B n'a pas eu la clé",
+                 "aircraft_pos": "ADS-B n'a pas eu la clé",
                  "ships": "AIS n'a pas eu la clé sur la période", "ais_max_km": "AIS n'a pas eu la clé",
-                 "aprs_stations": "APRS n'a pas eu la clé sur la période"}
+                 "aprs_stations": "APRS n'a pas eu la clé sur la période",
+                 "sensors433": "Capteurs 433 n'a pas eu la clé", "pocsag_msgs": "POCSAG n'a pas eu la clé",
+                 "beacon_frames": "Balise 406 n'a pas eu la clé", "elt_above": "La veille 121,5 n'a pas eu la clé"}
+        if "sensors433" not in idx:
+            for k in ("sensors433", "pocsag_msgs", "beacon_frames", "elt_above"):
+                notes[k] = "cliquez « Mettre à jour le Pi » (page Santé) pour activer ce graphique"
         bands, start = [], None
         for r in rows:
             uv = r[idx["undervolt"]]
@@ -3926,21 +3951,34 @@ class App(SaterMixin, PocsagMixin, tk.Tk):
                 start = None
         if start is not None:
             bands.append((start, t1))
+        sirens, start = [], None
+        if "elt_active" in idx:
+            for r in rows:
+                on = r[idx["elt_active"]]
+                if on and start is None:
+                    start = r[0]
+                elif not on and start is not None:
+                    sirens.append((start, r[0]))
+                    start = None
+            if start is not None:
+                sirens.append((start, t1))
         for key, ch in self.stats_charts.items():
-            pts = [(r[0], r[idx[key]]) for r in rows]
-            ch.set(pts, t0, t1, bands=bands if key == "temp" else None, note=notes.get(key, ""))
+            pts = [(r[0], r[idx[key]]) for r in rows] if key in idx else []
+            b = bands if key == "temp" else sirens if key == "elt_above" else None
+            ch.set(pts, t0, t1, bands=b, note=notes.get(key, ""))
         self.stats_polars["adsb"].set(data["adsb"].get("max_km"))
         self.stats_polars["ais"].set(data["ais"].get("max_km"))
         # Répartition du temps de clé
         modes = {}
         for r in rows:
-            m = r[idx["mode"]] or "?"
-            modes[m] = modes.get(m, 0) + 1
+            m = r[idx["mode"]]
+            if m:
+                modes[m] = modes.get(m, 0) + 1
         total = sum(modes.values())
         if total:
             share = "  ·  ".join(f"{SDR_MODE_LABELS.get(m, m)} {n * 100 / total:.0f} %" for m, n in
                                  sorted(modes.items(), key=lambda x: -x[1]))
-            uv_pct = sum(1 for r in rows if r[idx["undervolt"]]) * 100 / total
+            uv_pct = sum(1 for r in rows if r[idx["undervolt"]]) * 100 / max(1, len(rows))
             self.stats_share.config(text=f"Temps de clé : {share}\nSous-tension : {uv_pct:.0f} % du temps")
         else:
             self.stats_share.config(text="Pas encore de données : le service relève une mesure par minute.")
