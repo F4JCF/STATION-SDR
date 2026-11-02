@@ -293,3 +293,13 @@ restent en mémoire sur le Pi.
 - **Mission / Exercice** : journal horodaté automatique (détections, relèvements,
   alertes, bascules) et notes ; compte rendu HTML imprimable avec carte, zone
   probable, relèvements, détections et journal (Documents\STATION-SDR\Missions).
+
+## Images satellites Meteor-M
+
+Module installé depuis « Modules du Pi… » : compilation de meteor_demod et
+meteor_decode (dbdexter-dev), service `meteor-api` (port 5013) qui calcule les
+passages de Meteor-M N2-3 et N2-4 (SGP4, éléments CelesTrak), prend la clé
+pendant les passages assez hauts (mode « meteor », réception rtl_sdr →
+meteor_demod OQPSK 72k → meteor_decode, en direct), puis rend la clé au module
+précédent. Images PNG (redressées selon le sens du passage) et vignettes dans
+/var/lib/meteor/images (40 conservées), affichées par la vignette « Météo satellite ».

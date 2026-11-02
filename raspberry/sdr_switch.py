@@ -55,17 +55,19 @@ CANDIDATES = {
     "pocsag": ["pocsag"],
     # Radiosondes météo (radiosonde_auto_rx en conteneur Docker).
     "radiosonde": ["docker:radiosonde_auto_rx"],
+    # Images des satellites météo Meteor-M (pendant leurs passages seulement).
+    "meteor": ["meteor-rx"],
 }
 
 LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "off": "Arrêtée"}
+          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Satellite Meteor", "off": "Arrêtée"}
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
 # Modules de veille de sécurité : une fois la clé donnée par l'opérateur,
 # le partage automatique (rotation / planning) ne la reprend jamais ; elle
 # y reste jusqu'à une nouvelle bascule manuelle.
-STICKY_MODES = {"elt121"}
+STICKY_MODES = {"elt121", "meteor"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("sdr-switch")
@@ -378,6 +380,7 @@ LOG_UNITS = {
     "elt121": "Veille 121,5 MHz",
     "pocsag": "POCSAG (multimon-ng)",
     "docker:radiosonde_auto_rx": "Radiosondes (auto_rx)",
+    "meteor-api": "Satellites Meteor (planification)", "meteor-rx": "Satellites Meteor (réception)",
 }
 
 # Fichiers de configuration inclus dans la sauvegarde.
@@ -396,6 +399,7 @@ BACKUP_PATHS = [
     "/etc/systemd/system/elt121.service", "/etc/systemd/system/pocsag.service",
     "/etc/systemd/system/direwolf-iss.service", "/etc/modprobe.d",
     "/var/lib/sdr-switch/feeds.json", "/var/lib/sdr-switch/feeder-uuid", "/opt/radiosonde/station.cfg",
+    "/var/lib/meteor/config.json",
 ]
 
 
@@ -498,6 +502,10 @@ PI_FILES = [
     ("raspberry/elt121.service", "/etc/systemd/system/elt121.service", 0o644),
     ("raspberry/pocsag_api.py", "/usr/local/bin/pocsag_api.py", 0o755),
     ("raspberry/pocsag.service", "/etc/systemd/system/pocsag.service", 0o644),
+    ("raspberry/meteor_api.py", "/usr/local/bin/meteor_api.py", 0o755),
+    ("raspberry/meteor_rx.py", "/usr/local/bin/meteor_rx.py", 0o755),
+    ("raspberry/meteor-api.service", "/etc/systemd/system/meteor-api.service", 0o644),
+    ("raspberry/meteor-rx.service", "/etc/systemd/system/meteor-rx.service", 0o644),
 ]
 PI_VERSION_FILE = os.path.join(STATE_DIR, "pi_version")
 _update_state = {"running": False, "log": [], "result": None}
@@ -551,7 +559,7 @@ def _update_pi(ref: str) -> None:
             os.replace(tmp, dest)
         say(f"{len(fetched)} fichier(s) installé(s)")
         _systemctl("daemon-reload")
-        for unit in ("aprs-api", "svxlink-api", "station-monitor"):
+        for unit in ("aprs-api", "svxlink-api", "station-monitor", "meteor-api"):
             if _systemctl("is-enabled", f"{unit}.service").stdout.strip() == "enabled":
                 _systemctl("restart", f"{unit}.service")
                 say(f"  {unit} redémarré")
@@ -593,7 +601,7 @@ INSTALLERS = {
     "pocsag": ("install_pocsag.sh", "POCSAG (multimon-ng)", ["pocsag"], None),
     "ais": ("install_ais.sh", "AIS (AIS-catcher)", ["ais"], None),
     "radiosonde": ("install_radiosonde.sh", "Radiosondes (radiosonde_auto_rx)", ["radiosonde"], None),
-    # (à venir) "meteor": ("install_meteor.sh", "Images satellites Meteor-M", ["meteor"], None),
+    "meteor": ("install_meteor.sh", "Images satellites Meteor-M", ["meteor"], None),
     "protect": ("protect_sd.sh", "Protection de la carte SD et chien de garde", [], "/etc/systemd/journald.conf.d/station-sdr.conf"),
 }
 INSTALL_LOG = os.path.join(STATE_DIR, "install.log")
@@ -1088,7 +1096,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": f"aucun service installé pour {LABELS.get(mode, mode)}"})
         else:
             sched = _read_schedule()
-            if sched["type"] != "manual":
+            # « auto=1 » : bascule faite par un automate du Pi (passage de
+            # satellite) : pas de pause du planning.
+            if sched["type"] != "manual" and "auto=1" not in self.path:
                 # Bascule manuelle : le planning attend avant de reprendre la main.
                 _sched_state["hold_until"] = time.time() + sched["hold_minutes"] * 60
                 if sched["type"] == "rotation":

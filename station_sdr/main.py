@@ -45,6 +45,7 @@ from .pocsag_ui import PocsagMixin
 from .maint_ui import FeedsMixin, MaintMixin
 from .radiosonde_ui import RadiosondeMixin
 from .mission_ui import MissionMixin
+from .meteor_ui import MeteorMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -102,6 +103,7 @@ HOME_TILES = [
     ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
     ("pocsag", "POCSAG", "Radiomessagerie · DAPNET 439,9875"),
     ("radiosonde", "Radiosondes", "Ballons météo · 400–406 MHz"),
+    ("meteor", "Météo satellite", "Images Meteor-M · 137,9 MHz"),
     ("mission", "Mission / Exercice", "Veille, goniométrie, compte rendu"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
@@ -128,7 +130,7 @@ MODULE_SDR_MODE = {
     "radiosonde": "radiosonde",
 }
 SDR_MODE_LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "off": "arrêtée"}
+                   "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Satellite Meteor", "off": "arrêtée"}
 
 # Vignettes qui n'ouvrent pas une page interne mais une page web externe
 # (le Pi héberge directement l'interface, inutile de la reproduire ici).
@@ -392,6 +394,12 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
             d.ellipse([*pt(x - 0.04, 0.72), *pt(x + 0.04, 0.80)], fill=color)
         d.arc([*pt(0.66, 0.02), *pt(0.98, 0.34)], start=270, end=360, fill=color, width=lw)
         d.arc([*pt(0.74, 0.10), *pt(0.90, 0.26)], start=270, end=360, fill=color, width=lw)
+    elif key == "meteor":
+        # globe et bande de balayage
+        d.ellipse([*pt(0.10, 0.20), *pt(0.80, 0.90)], outline=color, width=lw)
+        d.arc([*pt(0.10, 0.40), *pt(0.80, 0.70)], start=0, end=180, fill=color, width=max(1, lw - 1))
+        d.rectangle([*pt(0.70, 0.04), *pt(0.92, 0.18)], outline=color, width=lw)
+        d.line([pt(0.70, 0.18), pt(0.52, 0.42)], fill=color, width=max(1, lw - 1))
     elif key == "mission":
         # écusson avec croix (sécurité civile)
         d.polygon([pt(0.5, 0.04), pt(0.90, 0.18), pt(0.84, 0.62), pt(0.5, 0.94), pt(0.16, 0.62), pt(0.10, 0.18)],
@@ -695,7 +703,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -1045,6 +1053,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self._build_pocsag_tab(self.pages["pocsag"])
         self._build_radiosonde_tab(self.pages["radiosonde"])
         self._build_mission_tab(self.pages["mission"])
+        self._build_meteor_tab(self.pages["meteor"])
         self._build_sat_tab(self.pages["sats"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
@@ -1181,16 +1190,16 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         grid.pack(fill="both", expand=True, padx=4, pady=4)
 
         self.tile_chips = {}
-        columns = 6
+        columns = 7 if len(HOME_TILES) > 18 else 6
         self.tile_frames = {}
         for c in range(columns):
             grid.grid_columnconfigure(c, weight=1, uniform="tiles")
         for i, (key, title, subtitle) in enumerate(HOME_TILES):
             r, c = divmod(i, columns)
             outer = theme.card(grid)
-            outer.grid(row=r, column=c, sticky="nsew", padx=6, pady=6)
+            outer.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
             inner = outer.inner
-            inner.configure(padding=12)
+            inner.configure(padding=10)
 
             header_row = tk.Frame(inner, bg=theme.BG_CARD)
             header_row.pack(anchor="w", fill="x")
@@ -1204,7 +1213,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             title_label.pack(side="left")
             subtitle_label = tk.Label(
                 inner, text=subtitle, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                wraplength=250, justify="left",
+                wraplength=225, justify="left",
             )
             subtitle_label.pack(anchor="w", pady=(2, 6))
             chip_label = theme.chip(inner, "—")
@@ -1329,6 +1338,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             self._pocsag_start_poll()
         if key == "radiosonde":
             self._rs_start_poll()
+        if key == "meteor":
+            self._mt_start_poll()
         if key == "s433" and not getattr(self, "_s433_poll_running", False):
             self._s433_poll_running = True
             self._s433_poll()

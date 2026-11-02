@@ -1,0 +1,13 @@
+[Unit]
+Description=Satellites Meteor-M : reception d'un passage (cle SDR)
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/meteor_rx.py
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=200
+
+[Install]
+WantedBy=multi-user.target

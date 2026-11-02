@@ -1,0 +1,15 @@
+[Unit]
+Description=Satellites Meteor-M : planification des passages et images
+After=network-online.target sdr-switch.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=METEOR_PORT=5013
+ExecStart=/usr/bin/python3 /usr/local/bin/meteor_api.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
