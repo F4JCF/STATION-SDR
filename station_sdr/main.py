@@ -4147,7 +4147,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             "squawk": "Squawk 7700/7600/7500", "sart": "Balises AIS SART/EPIRB/MOB", "aprs_msg": "Messages APRS",
             "winlink": "Courrier Winlink", "undervoltage": "Sous-tension du Pi", "dongle": "Clé SDR disparue",
             "vigilance": "Vigilance orange/rouge", "beacon": "Balise 406 réelle", "beacon_test": "Balise 406 test",
-            "elt121": "Sirène 121,5 MHz", "pocsag": "Messages POCSAG surveillés",
+            "elt121": "Sirène 121,5 MHz",
         }
         for i, (k, t) in enumerate(labels.items()):
             v = tk.BooleanVar(value=True)

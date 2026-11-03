@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
               "user": "", "password": "", "to": ""},
     "events": {"squawk": True, "sart": True, "aprs_msg": True, "winlink": True,
                "undervoltage": True, "dongle": True, "vigilance": True, "beacon": True, "beacon_test": True,
-               "elt121": True, "pocsag": True},
+               "elt121": True},
     # Vigilance Météo-France : clé gratuite à créer sur portail-api.meteofrance.fr
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
@@ -72,7 +72,6 @@ EVENT_LABELS = {
     "beacon": "Balise de détresse 406 MHz (émission réelle)",
     "beacon_test": "Balise 406 MHz en mode test / exercice",
     "elt121": "Sirène de balise sur 121,5 MHz",
-    "pocsag": "Message POCSAG surveillé (indicatif ou mot-clé)",
 }
 VIGI_URL = "https://public-api.meteofrance.fr/public/DPVigilance/v1/cartevigilance/encours"
 VIGI_PHENOMENA = {
@@ -278,6 +277,8 @@ def send_document(data: dict) -> dict:
 
 def notify(title: str, message: str, priority: int = 4, event: str = None, force: bool = False) -> dict:
     cfg = load_config()
+    if event == "pocsag":
+        return {"channels": {}, "skipped": "POCSAG jamais relayé hors du réseau local"}
     if event and not force and not cfg["events"].get(event, True):
         return {"skipped": True}
     result = {"time": time.time(), "title": title, "message": message, "channels": {}}
@@ -724,12 +725,9 @@ def collect_once(state: dict) -> None:
                    f"{e.get('sweeps_per_s')} balayages/s.\nEnregistrement disponible dans l'appli "
                    "(Balises de détresse → 121,5 MHz).", 4, "elt121")
 
-    pmsgs = fetch_json("http://127.0.0.1:5012/api/pocsag/messages?limit=50") or []
-    for m in pmsgs if isinstance(pmsgs, list) else []:
-        if m.get("watch") and time.time() - (m.get("time") or 0) < 900 \
-                and event_once(f"pocsag:{m.get('ric')}:{m.get('text', '')[:60]}", 3600):
-            notify(f"POCSAG — message pour RIC {m.get('ric')}",
-                   f"{m.get('text') or '(tonalité)'}\n{m.get('freq_mhz')} MHz, {m.get('rate')} bauds", 4, "pocsag")
+    # POCSAG : volontairement JAMAIS envoyé vers ntfy / e-mail. Les messages captés
+    # (radiomessagerie professionnelle, SDIS…) relèvent du secret des correspondances :
+    # ils restent sur le réseau local, consultables seulement dans l'appli (page POCSAG).
 
     if th.get("under_voltage_now") and event_once("undervolt", 6 * 3600):
         notify("Pi en sous-tension", "Le Raspberry Pi manque de courant : la clé SDR risque de décrocher.\n"
