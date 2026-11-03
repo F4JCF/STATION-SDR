@@ -1,0 +1,13 @@
+[Unit]
+Description=Ecoute a distance (cle SDR, son en direct)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/listen_api.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

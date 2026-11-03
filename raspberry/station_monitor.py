@@ -836,7 +836,7 @@ def vigilance_loop() -> None:
 
 REPORT_STATE = os.path.join(os.path.dirname(DB_PATH), "report_last")
 MODE_NAMES = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "iss": "APRS ISS", "beacon": "Balise 406",
-              "433": "433 MHz", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "openwebrx": "OpenWebRX", "off": "arrêtée"}
+              "433": "433 MHz", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "ecoute": "Écoute", "openwebrx": "OpenWebRX", "off": "arrêtée"}
 
 
 def build_report(hours: int = 24) -> tuple:
@@ -1007,12 +1007,27 @@ button:disabled{opacity:.5}
 <h1>F4JCF-SDR-STATION</h1><div class="sub" id="upd">Chargement…</div>
 <div class="card"><div class="lbl">Clé SDR</div><div class="big" id="mode">—</div>
 <div class="muted" id="modeinfo"></div><div class="btns" id="btns"></div><div class="err" id="btnerr"></div></div>
+<div class="card"><div class="lbl">Écoute à distance</div>
+<div class="row" style="margin-top:6px;align-items:center">
+<select id="lpre" onchange="pre()" style="font:inherit;padding:9px;border-radius:9px;background:var(--alt);color:var(--text);border:1px solid var(--border)">
+<option value="">Fréquence…</option><option value="145.500|fm">145,500 FM · appel 2 m</option>
+<option value="433.500|fm">433,500 FM · appel 70 cm</option><option value="144.800|fm">144,800 FM · APRS</option>
+<option value="145.825|fm">145,825 FM · APRS ISS</option><option value="145.800|fm">145,800 FM · ISS (phonie, SSTV)</option>
+<option value="121.375|am">121,375 AM · exercice ADRASEC</option><option value="121.500|am">121,500 AM · détresse</option></select>
+<input id="lf" inputmode="decimal" placeholder="MHz" style="width:110px;font:inherit;padding:9px;border-radius:9px;background:var(--alt);color:var(--text);border:1px solid var(--border)">
+<select id="lm" style="font:inherit;padding:9px;border-radius:9px;background:var(--alt);color:var(--text);border:1px solid var(--border)"><option value="fm">FM</option><option value="am">AM</option></select>
+<select id="lsq" style="font:inherit;padding:9px;border-radius:9px;background:var(--alt);color:var(--text);border:1px solid var(--border)"><option value="0">Silencieux : ouvert</option><option value="60">Silencieux : léger</option><option value="150">Silencieux : moyen</option><option value="300">Silencieux : fort</option></select>
+</div>
+<div class="btns"><button class="on" onclick="listen()">▶ Écouter</button><button id="lelt" style="display:none" onclick="listenElt()">▶ Écouter la veille 121,5</button>
+<button class="stop" onclick="stopListen()">■ Arrêter l'écoute</button></div>
+<audio id="aud" controls preload="none" style="width:100%;margin-top:10px;display:none"></audio>
+<div class="muted" id="linfo" style="font-size:12px;margin-top:6px">Le son passe par votre réseau ou le VPN. La clé SDR revient seule au module précédent 5 min après la fin de l'écoute.</div></div>
 <div class="card"><div class="lbl">Activité</div><div class="row" id="act"></div></div>
 <div class="card"><div class="lbl">Santé du Pi</div><div class="row" id="health"></div></div>
 <div class="card"><div class="lbl">Vigilance Météo-France</div><div id="vigi" class="muted">—</div></div>
 <div class="card"><div class="lbl">Dernières alertes</div><div id="alerts" class="muted">—</div></div>
 <script>
-const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",elt121:"121,5 MHz",pocsag:"POCSAG",radiosonde:"Radiosondes",meteor:"Images sat.","433":"433 MHz",iss:"APRS ISS",off:"Arrêtée"};
+const L={adsb:"ADS-B",ais:"AIS",aprs:"APRS",openwebrx:"OpenWebRX",beacon:"Balise 406",elt121:"121,5 MHz",pocsag:"POCSAG",radiosonde:"Radiosondes",meteor:"Images sat.","433":"433 MHz",iss:"APRS ISS",ecoute:"Écoute",off:"Arrêtée"};
 const VC={1:["#3fb950","VERT"],2:["#eab308","JAUNE"],3:["#f97316","ORANGE"],4:["#f85149","ROUGE"]};
 let busy=false;
 function tile(l,v,c,s){return `<div class="tile"><div class="lbl">${l}</div><div class="big ${c||""}">${v}</div>${s?`<div class="muted" style="font-size:12px">${s}</div>`:""}</div>`}
@@ -1034,6 +1049,7 @@ function render(d){
     b+=`<button class="${k===m.mode?"on":""}" ${(!ok||busy)?"disabled":""} onclick="setMode('${k}')">${L[k]}</button>`}
   b+=`<button class="stop" ${(m.mode==="off"||busy)?"disabled":""} onclick="setMode('off')">■ Arrêter</button>`;
   document.getElementById("btns").innerHTML=b;
+  document.getElementById("lelt").style.display=m.mode==="elt121"?"inline-block":"none";
   const a=d.activity||{};
   document.getElementById("act").innerHTML=
     tile("Avions",a.aircraft??"—",m.mode==="adsb"?"":"muted",m.mode==="adsb"?"":"en pause")+
@@ -1041,7 +1057,9 @@ function render(d){
     tile("Stations APRS",a.aprs??"—","", "30 dernières min")+
     tile("Winlink",a.winlink_unread??"—",a.winlink_unread?"orange":"","non lu(s)")+
     (a.elt121?tile("121,5 MHz",a.elt121.active?"SIRÈNE":"veille",a.elt121.active?"red":"green",
-      `niveau +${a.elt121.above_db??"—"} dB · ${a.elt121.events_today??0} détection(s) aujourd'hui`):"");
+      `niveau +${a.elt121.above_db??"—"} dB · ${a.elt121.events_today??0} détection(s) aujourd'hui`):"")+
+    (a.listen?tile("Écoute",String((a.listen.config||{}).freq_mhz||"—").replace(".",",")+" MHz","",
+      `${((a.listen.config||{}).mod||"").toUpperCase()} · ${a.listen.clients||0} auditeur(s)`+(a.listen.level_db!=null?` · ${a.listen.level_db} dB`:"")):"");
   const t=h.cpu_temp_c, pc=h.load&&h.cpu_count?Math.round(h.load[0]/h.cpu_count*100):null;
   const mem=h.mem_total?Math.round((h.mem_total-h.mem_available)/h.mem_total*100):null;
   const pw=th.under_voltage_now?["SOUS-TENSION","red"]:th.under_voltage_occurred?["À surveiller","orange"]:(h.throttled?["Correcte","green"]:["—","muted"]);
@@ -1060,6 +1078,24 @@ function render(d){
   document.getElementById("alerts").innerHTML=al.length?al.map(x=>`<div class="alert"><div class="t">${new Date(x.time*1000).toLocaleString("fr-FR")}</div><b>${esc(x.title)}</b><div class="muted">${esc(x.message)}</div></div>`).join(""):"Aucune alerte récente.";
   document.getElementById("upd").textContent="Mis à jour à "+new Date().toLocaleTimeString("fr-FR")+" · actualisation toutes les 10 s";
 }
+function pre(){const v=document.getElementById("lpre").value;if(!v)return;const [f,m]=v.split("|");
+  document.getElementById("lf").value=f.replace(".",",");document.getElementById("lm").value=m}
+function play(url){const a=document.getElementById("aud");a.style.display="block";a.src=url+"?t="+Date.now();
+  a.play().catch(()=>{document.getElementById("linfo").textContent="Appuyez sur ▶ du lecteur pour démarrer le son."})}
+async function listen(){const f=document.getElementById("lf").value.replace(",",".");
+  if(!f){document.getElementById("linfo").textContent="Choisissez une fréquence.";return}
+  document.getElementById("linfo").textContent="Bascule de la clé…";
+  try{const r=await fetch("/api/dash/listen",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({freq_mhz:f,mod:document.getElementById("lm").value,squelch:document.getElementById("lsq").value})});
+    const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
+    setTimeout(()=>play("http://"+location.hostname+":5014/api/listen/stream.wav"),2500);
+    document.getElementById("linfo").textContent="Écoute de "+f.replace(".",",")+" MHz"}
+  catch(e){document.getElementById("linfo").textContent="Échec : "+e.message}}
+function listenElt(){play("http://"+location.hostname+":5011/api/elt121/stream.wav");
+  document.getElementById("linfo").textContent="Écoute de la veille (la détection continue)"}
+async function stopListen(){const a=document.getElementById("aud");a.pause();a.removeAttribute("src");a.load();a.style.display="none";
+  if((window._d&&window._d.mode||{}).mode==="ecoute"){try{await fetch("/api/dash/listen/stop",{method:"POST"})}catch(e){}}
+  document.getElementById("linfo").textContent="Écoute arrêtée.";load()}
 async function load(){try{const r=await fetch("/api/dash");render(await r.json())}
   catch(e){document.getElementById("upd").innerHTML='<span class="err">Pi injoignable</span>'}}
 load();setInterval(()=>{if(!busy)load()},10000);
@@ -1085,6 +1121,8 @@ def dash_data() -> dict:
     inbox = fetch_json("http://127.0.0.1:8080/api/mailbox/in")
     if isinstance(inbox, list):
         activity["winlink_unread"] = sum(1 for x in inbox if x.get("Unread"))
+    if m == "ecoute":
+        activity["listen"] = fetch_json("http://127.0.0.1:5014/api/listen/status")
     if m == "elt121":
         e = fetch_json("http://127.0.0.1:5011/api/elt121/status") or {}
         activity["elt121"] = {k: e.get(k) for k in ("active", "above_db", "freq_mhz", "score", "events_today")}
@@ -1093,8 +1131,50 @@ def dash_data() -> dict:
     return {"mode": mode, "health": health, "activity": activity, "vigilance": dict(_vigilance), "alerts": alerts}
 
 
-def proxy_sdr_mode(mode: str):
-    req = urllib.request.Request(f"http://127.0.0.1:5006/api/sdr/mode/{mode}", data=b"", method="POST")
+LISTEN_CONF = "/var/lib/listen/config.json"
+
+
+def start_listen(data: dict) -> dict:
+    """Écoute à distance : règle la fréquence puis donne la clé au module « ecoute »."""
+    f = float(str(data.get("freq_mhz", "")).replace(",", "."))
+    if not 24 <= f <= 1766:
+        raise ValueError("fréquence hors de la plage de la clé (24 à 1766 MHz)")
+    cfg = {"freq_mhz": round(f, 5), "mod": "am" if data.get("mod") == "am" else "fm",
+           "squelch": max(0, min(500, int(data.get("squelch") or 0)))}
+    cur = (fetch_json("http://127.0.0.1:5006/api/sdr/mode") or {}).get("mode")
+    if cur == "elt121":
+        raise ValueError("la veille 121,5 MHz tient la clé : arrêtez-la d'abord (ou écoutez la veille)")
+    if cur == "ecoute":
+        req = urllib.request.Request("http://127.0.0.1:5014/api/listen/config", data=json.dumps(cfg).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    try:
+        with open(LISTEN_CONF, encoding="utf-8") as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        saved = {}
+    saved.update(cfg)
+    if cur and cur != "off":
+        saved["return_mode"] = cur
+    os.makedirs(os.path.dirname(LISTEN_CONF), exist_ok=True)
+    with open(LISTEN_CONF, "w", encoding="utf-8") as fh:
+        json.dump(saved, fh)
+    return proxy_sdr_mode("ecoute", auto=True)
+
+
+def stop_listen() -> dict:
+    try:
+        with open(LISTEN_CONF, encoding="utf-8") as fh:
+            back = json.load(fh).get("return_mode") or "adsb"
+    except (OSError, ValueError):
+        back = "adsb"
+    return proxy_sdr_mode(back, auto=True)
+
+
+def proxy_sdr_mode(mode: str, auto: bool = False):
+    req = urllib.request.Request(f"http://127.0.0.1:5006/api/sdr/mode/{mode}" + ("?auto=1" if auto else ""),
+                                 data=b"", method="POST")
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -1158,7 +1238,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, public_config(update_config(data if isinstance(data, dict) else {})))
         elif path.startswith("/api/dash/sdr/"):
             mode = path.rsplit("/", 1)[-1]
-            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "elt121", "pocsag", "radiosonde", "meteor", "433", "iss", "off"):
+            if mode not in ("adsb", "ais", "aprs", "openwebrx", "beacon", "elt121", "pocsag", "radiosonde", "meteor",
+                            "433", "iss", "ecoute", "off"):
                 self._send(400, {"error": "module inconnu"})
                 return
             try:
@@ -1170,6 +1251,18 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(data, dict) and data.get("send_now"):
                 _wx["last_sent"] = None
             self._send(200, {"ok": True, "config": cfg["wx"]})
+        elif path == "/api/dash/listen":
+            try:
+                self._send(200, start_listen(data if isinstance(data, dict) else {}))
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+            except Exception as exc:
+                self._send(502, {"error": str(exc)})
+        elif path == "/api/dash/listen/stop":
+            try:
+                self._send(200, stop_listen())
+            except Exception as exc:
+                self._send(502, {"error": str(exc)})
         elif path == "/api/monitor/send_document":
             try:
                 self._send(200, send_document(data if isinstance(data, dict) else {}))

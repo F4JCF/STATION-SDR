@@ -57,17 +57,19 @@ CANDIDATES = {
     "radiosonde": ["docker:radiosonde_auto_rx"],
     # Images des satellites météo Meteor-M (pendant leurs passages seulement).
     "meteor": ["meteor-rx"],
+    # Écoute à distance d'une fréquence (son en direct dans le navigateur).
+    "ecoute": ["listen"],
 }
 
 LABELS = {"adsb": "ADS-B", "ais": "AIS", "aprs": "APRS", "openwebrx": "OpenWebRX", "beacon": "Balise 406",
-          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "off": "Arrêtée"}
+          "433": "Capteurs 433", "iss": "APRS ISS", "elt121": "Balise 121,5", "pocsag": "POCSAG", "radiosonde": "Radiosondes", "meteor": "Images satellites", "ecoute": "Écoute", "off": "Arrêtée"}
 # "off" : aucun module ne tient la clé (tout est arrêté) ; le partage
 # automatique est suspendu jusqu'à ce qu'on redonne la clé à un module.
 OFF = "off"
 # Modules de veille de sécurité : une fois la clé donnée par l'opérateur,
 # le partage automatique (rotation / planning) ne la reprend jamais ; elle
 # y reste jusqu'à une nouvelle bascule manuelle.
-STICKY_MODES = {"elt121", "meteor"}
+STICKY_MODES = {"elt121", "meteor", "ecoute"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("sdr-switch")
@@ -505,11 +507,17 @@ PI_FILES = [
     ("raspberry/meteor_api.py", "/usr/local/bin/meteor_api.py", 0o755),
     ("raspberry/meteor_rx.py", "/usr/local/bin/meteor_rx.py", 0o755),
     ("raspberry/sstv_decode.py", "/usr/local/bin/sstv_decode.py", 0o755),
+    ("raspberry/listen_api.py", "/usr/local/bin/listen_api.py", 0o755),
+    ("raspberry/nextion_station.py", "/usr/local/bin/nextion_station.py", 0o755),
+    ("raspberry/listen.service", "/etc/systemd/system/listen.service", 0o644),
     ("raspberry/meteor-api.service", "/etc/systemd/system/meteor-api.service", 0o644),
     ("raspberry/meteor-rx.service", "/etc/systemd/system/meteor-rx.service", 0o644),
 ]
 # Fichiers apparus après coup dans un module : installés si le module l'est
-PI_COMPANIONS = {"/usr/local/bin/sstv_decode.py": "/usr/local/bin/meteor_rx.py"}
+PI_COMPANIONS = {"/usr/local/bin/sstv_decode.py": "/usr/local/bin/meteor_rx.py",
+                 # écoute à distance : seulement rtl_fm, déjà là avec les modules de base
+                 "/usr/local/bin/listen_api.py": "/usr/local/bin/elt121_api.py",
+                 "/etc/systemd/system/listen.service": "/usr/local/bin/elt121_api.py"}
 PI_VERSION_FILE = os.path.join(STATE_DIR, "pi_version")
 
 
@@ -520,6 +528,7 @@ def _heal_companions():
     ref = _read_pi_version()
     if not ref:
         return
+    new_unit = False
     for src, dest, mode in PI_FILES:
         need = PI_COMPANIONS.get(dest)
         if not need or os.path.exists(dest) or not os.path.exists(need):
@@ -527,14 +536,20 @@ def _heal_companions():
         try:
             with urllib.request.urlopen(f"{REPO_RAW}/{ref}/{src}", timeout=30) as resp:
                 data = resp.read()
-            compile(data, src, "exec")
+            if src.endswith(".py"):
+                compile(data, src, "exec")
             with open(dest + ".new", "wb") as f:
                 f.write(data)
             os.chmod(dest + ".new", mode)
             os.replace(dest + ".new", dest)
             log.info("Fichier compagnon installé : %s", dest)
+            new_unit |= dest.endswith(".service")
         except Exception as exc:
             log.warning("Fichier compagnon %s : %s", dest, exc)
+    if new_unit:                       # nouveau service : le faire connaître (redémarrage de ce service)
+        _systemctl("daemon-reload")
+        log.info("Nouveau service installé : redémarrage de la bascule de clé")
+        subprocess.run(["systemctl", "--no-block", "restart", "sdr-switch.service"], timeout=10)
 _update_state = {"running": False, "log": [], "result": None}
 
 
@@ -589,11 +604,11 @@ def _update_pi(ref: str) -> None:
             os.replace(tmp, dest)
         say(f"{len(fetched)} fichier(s) installé(s)")
         _systemctl("daemon-reload")
-        for unit in ("aprs-api", "svxlink-api", "station-monitor", "meteor-api"):
+        for unit in ("aprs-api", "svxlink-api", "station-monitor", "meteor-api", "nextion-station"):
             if _systemctl("is-enabled", f"{unit}.service").stdout.strip() == "enabled":
                 _systemctl("restart", f"{unit}.service")
                 say(f"  {unit} redémarré")
-        for unit in ("beacon406", "rtl433", "elt121", "pocsag"):
+        for unit in ("beacon406", "rtl433", "elt121", "pocsag", "listen"):
             if _systemctl("is-active", f"{unit}.service").stdout.strip() == "active":
                 _systemctl("restart", f"{unit}.service")
                 say(f"  {unit} redémarré")
@@ -632,6 +647,7 @@ INSTALLERS = {
     "ais": ("install_ais.sh", "AIS (AIS-catcher)", ["ais"], None),
     "radiosonde": ("install_radiosonde.sh", "Radiosondes (radiosonde_auto_rx)", ["radiosonde"], None),
     "meteor": ("install_meteor.sh", "Images satellites : Meteor-M, SSTV de l'ISS, bruit radio", ["meteor"], None),
+    "nextion": ("install_nextion.sh", "Écran Nextion : résumé de la station", [], "/etc/systemd/system/nextion-station.service"),
     "protect": ("protect_sd.sh", "Protection de la carte SD et chien de garde", [], "/etc/systemd/journald.conf.d/station-sdr.conf"),
 }
 INSTALL_LOG = os.path.join(STATE_DIR, "install.log")

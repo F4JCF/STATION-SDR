@@ -1,0 +1,13 @@
+[Unit]
+Description=Ecran Nextion : resume de F4JCF-SDR-STATION
+After=network-online.target station-monitor.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/nextion_station.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

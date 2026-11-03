@@ -346,3 +346,32 @@ Bouton « Envoyer… » de la page Mission : le Pi (`station_monitor`,
 POST /api/monitor/send_document) envoie le compte rendu HTML en pièce jointe par
 e-mail (SMTP configuré + destinataires supplémentaires) et/ou sur le téléphone
 par ntfy (résumé + fichier, case à décocher pour une mission sensible).
+
+## Écoute à distance (téléphone)
+
+Tableau de bord du téléphone (`http://192.168.1.229:5008/`, à la maison ou par
+le VPN), carte « Écoute à distance » : choix d'une fréquence (FM ou AM) et
+écoute en direct dans le navigateur. La clé passe sur le module « ecoute »
+(service `listen`, port 5014, son WAV 16 kHz) et revient seule au module
+précédent 5 min après le dernier auditeur. Pendant la veille 121,5 MHz, le
+bouton « Écouter la veille » diffuse le son du module elt121 sans interrompre
+la détection (`/api/elt121/stream.wav`).
+
+## Spots HF (PSKReporter)
+
+Vignette « Spots HF » : qui entend vos émissions (VarAC, FT8, WSPR…) et celles
+des indicatifs suivis, ou ce qu'ils entendent, sur 1 h / 6 h / 24 h, avec carte
+et distances. Interrogation de PSKReporter au plus toutes les 5 minutes.
+
+## Écran Nextion
+
+Module « Écran Nextion » (Modules du Pi…) : service `nextion-station` qui dessine
+directement sur l'écran (aucune modification du projet Nextion) : station,
+alertes, passages de satellites ; un appui change d'écran. Remplace
+`nextion-bridge` (désactivé, réversible). Réglages : /etc/nextion-station.json.
+
+## Foudre
+
+Page Météo, case « ⚡ Foudre » : impacts en temps réel (Blitzortung.org, usage
+privé) sur la carte, distance du plus proche, alerte quand un impact tombe à
+moins de N km (25 par défaut).

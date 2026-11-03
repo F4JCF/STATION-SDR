@@ -15,6 +15,7 @@ Port ELT121_PORT (5011) :
   GET  /api/elt121/waterfall           spectrogramme audio des 6 dernières s
   GET  /api/elt121/events              détections (plus récentes d'abord)
   GET  /api/elt121/audio?seconds=10    dernières secondes reçues (WAV)
+  GET  /api/elt121/stream.wav          écoute en direct (WAV 6 kHz, sans fin)
   GET  /api/elt121/rec/<nom>.wav       enregistrement d'une détection
   POST /api/elt121/config              {"freq_mhz", "gain", "ppm"}
   POST /api/elt121/clear               efface les détections
@@ -98,6 +99,28 @@ def save_events():
         os.replace(tmp, EVENTS_FILE)
     except OSError:
         pass
+
+
+_listeners = []
+
+
+def _publish(audio):
+    pcm = np.clip(audio * _gain(audio), -32767, 32767).astype("<i2").tobytes()
+    for q in list(_listeners):
+        try:
+            q.put_nowait(pcm)
+        except Exception:
+            pass
+
+
+_agc = [2000.0]
+
+
+def _gain(audio):
+    """Gain automatique lent pour l'écoute en direct."""
+    rms = float(np.sqrt(np.mean(audio * audio))) + 1.0
+    _agc[0] = 0.95 * _agc[0] + 0.05 * rms
+    return min(30.0, 5000.0 / _agc[0])
 
 
 def wav_bytes(samples: np.ndarray) -> bytes:
@@ -308,6 +331,8 @@ def run():
             audio = (raw - env)[: len(raw) // DEC * DEC].reshape(-1, DEC).mean(axis=1)
             with _lock:
                 audio_ring.append(audio)
+            if _listeners:
+                _publish(audio)
             det.feed_audio(audio)
             buf = np.concatenate([rest, audio])
             i = 0
@@ -382,6 +407,32 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/elt121/events":
             with _lock:
                 self._send(200, events[:200])
+        elif path in ("/api/elt121/stream.wav", "/api/elt121/stream"):
+            import queue
+            import struct
+            q = queue.Queue(maxsize=40)
+            _listeners.append(q)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                size = 0x7FFFFFF0
+                self.wfile.write(b"RIFF" + struct.pack("<I", size + 36) + b"WAVEfmt " +
+                                 struct.pack("<IHHIIHH", 16, 1, 1, AUDIO_RATE, AUDIO_RATE * 2, 2, 16) +
+                                 b"data" + struct.pack("<I", size))
+                while True:
+                    try:
+                        block = q.get(timeout=1)
+                    except queue.Empty:
+                        block = bytes(int(AUDIO_RATE * 0.2) * 2)
+                    self.wfile.write(block)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                if q in _listeners:
+                    _listeners.remove(q)
         elif path == "/api/elt121/audio":
             secs = min(30.0, float(q.get("seconds", ["10"])[0]))
             self._send(200, wav_bytes(last_audio(secs)), "audio/wav")
