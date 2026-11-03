@@ -241,7 +241,8 @@ class MeteorMixin:
                        f"{im.get('mode', 'SSTV')} · {'complète' if im.get('complete') else 'partielle'}")
             else:
                 txt = (f"{time.strftime('%d/%m %H:%M', time.localtime(im['aos']))}\n"
-                       f"{im['sat'].replace('Meteor-M ', '')} · {im['max_el']:.0f}° · {im['lines']} l.")
+                       f"{im['sat'].replace('Meteor-M ', '')} · {im['max_el']:.0f}° · "
+                       + (f"{im['useful_pct']} % reçu" if im.get("useful_pct") is not None else f"{im['lines']} l."))
             t = tk.Label(cell, text=txt,
                          bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", 8), justify="center")
             t.pack(pady=(2, 4))

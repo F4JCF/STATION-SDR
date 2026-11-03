@@ -94,7 +94,8 @@ def fetch_tles(force=False):
             cache = json.load(f)
     except (OSError, ValueError):
         cache = None
-    if cache and not force and time.time() - cache.get("time", 0) < 12 * 3600:
+    complete = cache and all(str(c) in (cache.get("tles") or {}) for c in SATS)
+    if cache and complete and not force and time.time() - cache.get("time", 0) < 12 * 3600:
         state["tle_time"] = cache["time"]
         return cache["tles"]
     tles = {}
@@ -194,11 +195,18 @@ def sdr_switch(mode):
 def run_job(job, info):
     """Donne la clé au module « meteor » pour la tâche `job`, attend la fin
     (et le décodage), puis rend la clé au module précédent."""
-    try:
-        prev = sdr_mode()
-    except Exception as exc:
-        state["error"] = f"bascule de clé injoignable : {exc}"
+    prev = None
+    for _ in range(6):                # le service de bascule redémarre peut-être (mise à jour)
+        try:
+            prev = sdr_mode()
+            break
+        except Exception as exc:
+            state["error"] = f"bascule de clé injoignable : {exc}"
+            time.sleep(5)
+    if prev is None:
         return None
+    if str(state.get("error") or "").startswith("bascule de clé"):
+        state["error"] = None
     if prev in ("elt121", "off"):
         log.info("Tâche %s ignorée : clé %s", job["name"], prev)
         state["last"] = {**info, "name": job["name"], "result": "ignoré (veille 121,5 ou clé arrêtée)"}

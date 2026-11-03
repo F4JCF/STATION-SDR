@@ -37,12 +37,22 @@ def post_process(job, png, extra=None):
     if job.get("northbound") and job.get("kind", "lrpt") == "lrpt":
         img = img.rotate(180)
         img.save(png)
+    useful = None
+    if job.get("kind", "lrpt") == "lrpt":
+        # Part des lignes réellement reçues (le décodeur met du noir à la place des paquets perdus)
+        gray = img.convert("L")
+        gw, gh = gray.size
+        data = gray.tobytes()
+        rows = sum(1 for y in range(gh) if sum(data[y * gw:(y + 1) * gw:8]) > 12 * len(range(0, gw, 8)))
+        useful = round(100 * rows / gh)
+        if useful < 3:
+            return None
     thumb = img.convert("RGB")
     thumb.thumbnail((480, 900))
     thumb.save(png[:-4] + ".jpg", quality=82)
     meta = {"name": job["name"], "sat": job["sat"], "aos": job["aos"], "max_el": job["max_el"],
             "width": w, "lines": h, "size": os.path.getsize(png), "time": time.time(),
-            "kind": job.get("kind", "lrpt"), **(extra or {})}
+            "kind": job.get("kind", "lrpt"), "useful_pct": useful, **(extra or {})}
     with open(png[:-4] + ".json", "w", encoding="utf-8") as f:
         json.dump(meta, f)
     return meta
@@ -199,7 +209,7 @@ def receive(job):
                 os.remove(final[:-4] + ext)
             except OSError:
                 pass
-        finish({"result": "image trop courte (réception incomplète)"})
+        finish({"result": "image vide ou trop courte (signal trop faible)"})
         return
     finish({"result": f"image de {meta['lines']} lignes", "name": job["name"]})
     log.info("Image %s : %d lignes", job["name"], meta["lines"])
