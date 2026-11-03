@@ -88,35 +88,67 @@ def save_conf():
         json.dump(conf, f)
 
 
+def _tle_get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "STATION-SDR satellites (F4JCF)"})
+    text = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+    return [l.strip() for l in text.splitlines() if l.strip()]
+
+
 def fetch_tles(force=False):
+    """Éléments orbitaux (CelesTrak), un satellite à la fois. Chaque satellite
+    garde ses derniers éléments connus si un téléchargement échoue (CelesTrak
+    refuse une même demande répétée dans les 2 heures)."""
     try:
         with open(TLE_FILE, encoding="utf-8") as f:
             cache = json.load(f)
     except (OSError, ValueError):
         cache = None
-    complete = cache and all(str(c) in (cache.get("tles") or {}) for c in SATS)
-    if cache and complete and not force and time.time() - cache.get("time", 0) < 12 * 3600:
-        state["tle_time"] = cache["time"]
-        return cache["tles"]
-    tles = {}
-    for catnr in SATS:
-        try:
-            url = f"https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=tle"
-            req = urllib.request.Request(url, headers={"User-Agent": "STATION-SDR meteor (F4JCF)"})
-            lines = [l.strip() for l in urllib.request.urlopen(req, timeout=30).read().decode().splitlines() if l.strip()]
-            if len(lines) >= 3 and lines[1].startswith("1 ") and lines[2].startswith("2 "):
-                tles[str(catnr)] = [lines[1], lines[2]]
-        except Exception as exc:
-            log.warning("Éléments orbitaux %s indisponibles : %s", catnr, exc)
-    if tles:
+    cache = cache or {"time": 0, "tles": {}, "sat_time": {}}
+    cache.setdefault("tles", {})
+    cache.setdefault("sat_time", {})
+    now = time.time()
+    missing = [c for c in SATS if str(c) not in cache["tles"]]
+    stale = [c for c in SATS if now - cache["sat_time"].get(str(c), cache.get("time", 0)) > 12 * 3600]
+    todo = list(SATS) if force else sorted(set(missing) | set(stale))
+    # Évite de redemander trop souvent un satellite qui vient d'échouer
+    tried = state.setdefault("tle_tried", {})
+    todo = [c for c in todo if force or now - tried.get(c, 0) > 2 * 3600 or str(c) not in cache["tles"] and now - tried.get(c, 0) > 900]
+    errors = state.setdefault("tle_errors", {})
+    changed = False
+    for catnr in todo:
+        tried[catnr] = now
+        urls = [f"https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=tle"]
+        if catnr == ISS:
+            urls.append("https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle")
+        for url in urls:
+            try:
+                lines = _tle_get(url)
+                pair = None
+                for i in range(len(lines) - 1):
+                    if lines[i].startswith("1 ") and lines[i + 1].startswith("2 ") and \
+                            lines[i][2:7].strip() == str(catnr):
+                        pair = [lines[i], lines[i + 1]]
+                        break
+                if pair:
+                    cache["tles"][str(catnr)] = pair
+                    cache["sat_time"][str(catnr)] = now
+                    errors.pop(str(catnr), None)
+                    changed = True
+                    break
+                errors[str(catnr)] = (lines[0][:120] if lines else "réponse vide")
+            except Exception as exc:
+                errors[str(catnr)] = str(exc)
+                log.warning("Éléments orbitaux %s indisponibles : %s", catnr, exc)
+    if changed:
+        cache["time"] = now
         os.makedirs(DATA, exist_ok=True)
         with open(TLE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"time": time.time(), "tles": tles}, f)
-        state["tle_time"] = time.time()
-        return tles
-    if cache:
-        return cache["tles"]
-    raise RuntimeError("éléments orbitaux indisponibles (CelesTrak injoignable)")
+            json.dump(cache, f)
+    state["tle_time"] = cache.get("time") or None
+    state["tle_sats"] = [SATS[c] for c in SATS if str(c) in cache["tles"]]
+    if not cache["tles"]:
+        raise RuntimeError("éléments orbitaux indisponibles (CelesTrak injoignable)")
+    return {k: v for k, v in cache["tles"].items() if int(k) in SATS}
 
 
 def observer():
@@ -221,8 +253,13 @@ def run_job(job, info):
     state["current"] = {**info, "name": job["name"], "prev_mode": prev}
     log.info("Tâche %s : clé prise à %s", job["name"], prev)
     res = None
+    switch_err = None
     try:
-        sdr_switch("meteor")
+        try:
+            sdr_switch("meteor")
+        except Exception as exc:
+            switch_err = f"bascule de la clé refusée : {exc}"
+            raise
         while time.time() < job["los"] and not os.path.exists(JOB_FILE + ".done"):
             time.sleep(5)
         # Laisse meteor-rx finir le décodage (il écrit .done)
@@ -243,7 +280,10 @@ def run_job(job, info):
         except (OSError, ValueError):
             pass
         state["current"] = None
-        state["last"] = {**info, "name": job["name"], "result": (res or {}).get("result", "pas de résultat")}
+        if res is None and not switch_err:
+            switch_err = "le service de réception n'a rien rendu (voir journal meteor-rx)"
+        state["last"] = {**info, "name": job["name"],
+                         "result": (res or {}).get("result") or switch_err or "pas de résultat"}
         prune()
     return res
 

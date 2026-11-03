@@ -175,6 +175,12 @@ class MeteorMixin:
             self.mt_info.config(text=(f"Dernier passage : {last['sat']} à "
                                       f"{time.strftime('%H:%M', time.localtime(last['aos']))} — {last.get('result')}")
                                 if last else (f"⚠ {st['error']}" if st.get("error") else ""))
+        if st.get("sstv_active") and not any(p.get("kind") == "sstv" for p in st.get("passes") or []):
+            why = (st.get("tle_errors") or {}).get("25544")
+            if "tle_sats" not in st:
+                why = "mettez à jour le Pi (page Santé → « Mettre à jour le Pi »)"
+            self.mt_info.config(text="⚠ Aucun passage de l'ISS calculé" + (f" : {why}" if why else
+                                                                          " (nouvel essai dans l'heure)"))
         tree = self.mt_tree
         tree.delete(*tree.get_children())
         minel = float(cfg.get("min_el", 25))
