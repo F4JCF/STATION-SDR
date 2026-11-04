@@ -82,8 +82,14 @@ def parse_line(line: str):
 
 
 def watched(msg) -> bool:
+    # Le mot-clé doit commencer un mot (« VSAV » trouve « VSAV-881 », « CA »
+    # ne trouve plus « CAGNES » ni « DECLENCHEMENT »). Un RIC doit être exact.
     hay = f"{msg['ric']} {msg['text']}".upper()
-    return any(w and w.upper() in hay for w in conf.get("watch") or [])
+    for w in conf.get("watch") or []:
+        w = w.strip().upper()
+        if w and (w == str(msg["ric"]) or re.search(r"(?<![A-Z0-9])" + re.escape(w), hay)):
+            return True
+    return False
 
 
 def stop_procs():

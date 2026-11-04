@@ -3376,7 +3376,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         if self.config_data.get("alert_sound", True):
             self._alert_sound()
         self._tray_notify(f"⚠ {title}", text)
-        self._show_alert_popup(title, text)
+        # Garde-fou : jamais plus de 3 fenêtres d'alerte empilées ; au-delà,
+        # l'alerte reste dans le bandeau et l'historique.
+        open_ = [w for w in getattr(self, "_alert_popups", []) if w.winfo_exists()]
+        if len(open_) < 3:
+            self._show_alert_popup(title, text)
 
     def _alert_sound(self):
         def play():

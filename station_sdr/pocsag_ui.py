@@ -240,13 +240,24 @@ class PocsagMixin:
         self.after(0, self._pocsag_alerts, msgs)
 
     def _pocsag_alerts(self, msgs):
+        # Un même message part vers des dizaines de bipeurs (et est relancé) :
+        # une seule alerte par texte, rôle CA/EQ/COND ignoré, avec le nombre
+        # de destinataires.
+        groups = {}
         for m in msgs or []:
             if m.get("watch") and time.time() - (m.get("time") or 0) < 900:
-                self._raise_alert(f"pocsag:{m.get('ric')}:{(m.get('text') or '')[:60]}",
-                                  f"POCSAG — message pour RIC {m.get('ric')}",
-                                  f"{m.get('text') or '(tonalité)'}\n"
-                                  f"{time.strftime('%H:%M:%S', time.localtime(m.get('time') or 0))} · "
-                                  f"{_ftxt(m.get('freq_mhz') or 0)} MHz", cooldown=3600)
+                core = " ".join(_core_tokens(m.get("text") or "")).upper()[:60] or f"ric:{m.get('ric')}"
+                g = groups.setdefault(core, {"first": m, "rics": set()})
+                g["rics"].add(m.get("ric"))
+                if (m.get("time") or 0) < (g["first"].get("time") or 0):
+                    g["first"] = m
+        for core, g in groups.items():
+            m, n = g["first"], len(g["rics"])
+            dest = f"RIC {m.get('ric')}" if n == 1 else f"{n} destinataires"
+            self._raise_alert(f"pocsag:{core}", f"POCSAG — message surveillé ({dest})",
+                              f"{m.get('text') or '(tonalité)'}\n"
+                              f"{time.strftime('%H:%M:%S', time.localtime(m.get('time') or 0))} · "
+                              f"{_ftxt(m.get('freq_mhz') or 0)} MHz", cooldown=3600)
         if "pocsag" in self.tile_chips:
             n = sum(1 for m in msgs or [] if time.time() - (m.get("time") or 0) < 3600)
             self.tile_chips["pocsag"].config(text=f"{n} message(s) / h")
