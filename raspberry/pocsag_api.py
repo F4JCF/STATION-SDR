@@ -82,8 +82,8 @@ def parse_line(line: str):
 
 
 def watched(msg) -> bool:
-    # Le mot-clé doit commencer un mot (« VSAV » trouve « VSAV-881 », « CA »
-    # ne trouve plus « CAGNES » ni « DECLENCHEMENT »). Un RIC doit être exact.
+    # Le mot-clé doit commencer un mot (« VSAV » trouve « VSAV-881 » ; « SAV »
+    # ne le trouve plus). Un RIC doit être exact.
     hay = f"{msg['ric']} {msg['text']}".upper()
     for w in conf.get("watch") or []:
         w = w.strip().upper()
