@@ -75,7 +75,7 @@ class MeteorMixin:
 
         body = tk.Frame(outer, bg=theme.BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        left = tk.Frame(body, bg=theme.BG, width=560)
+        left = tk.Frame(body, bg=theme.BG, width=theme.px(560))
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         tk.Label(left, text="Prochains passages", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(

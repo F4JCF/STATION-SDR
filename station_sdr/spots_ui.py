@@ -97,7 +97,7 @@ class SpotsMixin:
         self.sp_summary.pack(fill="x", padx=12)
         body = tk.Frame(outer, bg=theme.BG)
         body.pack(fill="both", expand=True, padx=12, pady=(4, 8))
-        left = tk.Frame(body, bg=theme.BG, width=760)
+        left = tk.Frame(body, bg=theme.BG, width=theme.px(760))
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         tb = theme.card(left)
@@ -113,7 +113,7 @@ class SpotsMixin:
         self.sp_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self.sp_tree.pack(fill="both", expand=True, padx=1, pady=1)
-        tk.Label(left, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=750,
+        tk.Label(left, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(750),
                  text=("Données PSKReporter.info : les stations qui décodent un signal (VarAC, FT8, WSPR, JS8…) le "
                        "signalent sur Internet. Séparez plusieurs indicatifs par des virgules. Actualisation "
                        "automatique toutes les 5 minutes quand la page est ouverte.")).pack(anchor="w", pady=(4, 0))

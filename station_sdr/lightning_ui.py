@@ -33,7 +33,7 @@ class LightningMixin:
                    insertbackground=theme.TEXT, relief="flat").pack(side="left", padx=2)
         tk.Label(buttons_row, text="km", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left")
         self.lt_info = tk.Label(info_parent, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8),
-                                wraplength=640, justify="left")
+                                wraplength=theme.px(640), justify="left")
         self.lt_info.pack(anchor="w", pady=(2, 0))
         self._lt_icons = {}
         self._lt_markers = []

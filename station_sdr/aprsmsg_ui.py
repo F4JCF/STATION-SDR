@@ -75,7 +75,7 @@ class AprsMsgMixin:
 
         body = tk.Frame(win, bg=theme.BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 6))
-        left = tk.Frame(body, bg=theme.BG, width=250)
+        left = tk.Frame(body, bg=theme.BG, width=theme.px(250))
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         lb = tk.Frame(left, bg=theme.BG)
@@ -112,7 +112,7 @@ class AprsMsgMixin:
         self._am_count = tk.Label(sr, text="0/67", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self._am_count.pack(side="left", padx=6)
         ttk.Button(sr, text="Envoyer", style="Accent.TButton", command=self._am_send).pack(side="left")
-        tk.Label(win, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=940,
+        tk.Label(win, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(940),
                  text=("Les messages passent par Internet (réseau APRS-IS) : aucune émission radio. Ils atteignent "
                        "aussi les stations radio via les iGates qui relaient vers la VHF. 67 caractères au plus, "
                        "sans accents. Un message non acquitté est réémis 4 fois (30 s, 1, 2 puis 4 min).")).pack(

@@ -38,7 +38,7 @@ class MaintMixin:
             anchor="w", padx=14, pady=(12, 2))
         tk.Label(win, text=("Un clic installe le module sur le Pi (téléchargement, compilation éventuelle, "
                             "configuration). Comptez de 1 à 30 minutes selon le module ; le Pi reste utilisable."),
-                 bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=940).pack(
+                 bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=theme.px(940)).pack(
             anchor="w", padx=14)
         self._mod_list = tk.Frame(win, bg=theme.BG)
         self._mod_list.pack(fill="x", padx=14, pady=8)
@@ -75,7 +75,7 @@ class MaintMixin:
         if err:
             tk.Label(self._mod_list, text=(f"Le Pi ne répond pas, ou son service de bascule est ancien : cliquez "
                                            f"d'abord « Mettre à jour le Pi ».\n({err})"),
-                     bg=theme.BG, fg=theme.ORANGE, font=theme.FONT_BODY, justify="left", wraplength=940).pack(anchor="w")
+                     bg=theme.BG, fg=theme.ORANGE, font=theme.FONT_BODY, justify="left", wraplength=theme.px(940)).pack(anchor="w")
             self.after(10000, self._modules_refresh)
             return
         inst = data.get("install") or {}
@@ -243,7 +243,7 @@ class FeedsMixin:
             anchor="w", pady=(12, 2), **pad)
         tk.Label(win, text=("Vos réceptions apparaissent sur les cartes mondiales. Le partage fonctionne pendant que "
                             "le module a la clé SDR (rotation comprise). Rien n'est émis par radio."),
-                 bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE, wraplength=860, justify="left").pack(
+                 bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE, wraplength=theme.px(860), justify="left").pack(
             anchor="w", **pad)
         self._fv = {k: tk.BooleanVar(value=False) for k in ("adsbx", "adsblol", "airplaneslive", "ais_share",
                                                              "aprs_igate")}
@@ -274,7 +274,7 @@ class FeedsMixin:
         check(f, "adsblol", "adsb.lol  (données ouvertes)")
         check(f, "airplaneslive", "airplanes.live")
         self._feeds_uuid = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                    justify="left", wraplength=820)
+                                    justify="left", wraplength=theme.px(820))
         self._feeds_uuid.pack(anchor="w", pady=(4, 0))
 
         f = card("Navires (AIS)")
@@ -284,7 +284,7 @@ class FeedsMixin:
         entry(f, "udp2", "Sortie UDP 2 (hôte:port, ex. MarineTraffic) :")
         tk.Label(f, text=("AISHub et MarineTraffic donnent l'adresse et le port à saisir après inscription de "
                           "votre station sur leur site."), bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
-                 wraplength=820, justify="left").pack(anchor="w")
+                 wraplength=theme.px(820), justify="left").pack(anchor="w")
 
         f = card("APRS VHF 144,800")
         check(f, "aprs_igate", "iGate réception seule vers APRS-IS (aprs.fi) — rien n'est émis")
@@ -296,7 +296,7 @@ class FeedsMixin:
         bar.pack(fill="x", pady=8, **pad)
         ttk.Button(bar, text="Appliquer", style="Accent.TButton", command=self._feeds_apply).pack(side="left")
         self._feeds_status = tk.Label(bar, text="Lecture des réglages du Pi…", bg=theme.BG, fg=theme.MUTED,
-                                      font=theme.FONT_SUBTITLE, justify="left", wraplength=700)
+                                      font=theme.FONT_SUBTITLE, justify="left", wraplength=theme.px(700))
         self._feeds_status.pack(side="left", padx=12)
         self._feeds_load()
 

@@ -65,7 +65,7 @@ class MissionMixin:
     def _build_mission_tab(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=700)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(700))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
         c = theme.card(left)
@@ -101,7 +101,7 @@ class MissionMixin:
         ttk.Button(b, text="Envoyer…", style="Flat.TButton",
                    command=self._mission_send_dialog).pack(side="left", padx=(8, 0))
         self.ms_state = tk.Label(left, text="", bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", 14, "bold"),
-                                 pady=8, wraplength=660, justify="center")
+                                 pady=8, wraplength=theme.px(660), justify="center")
         self.ms_state.pack(fill="x", padx=12, pady=(0, 6))
         q = tk.Frame(left, bg=theme.BG)
         q.pack(fill="x", padx=12)
@@ -117,7 +117,7 @@ class MissionMixin:
             "en goniométrie, alertes, bascules de la clé. Ajoutez vos propres notes (contacts radio, consignes, "
             "positions des équipes). Le compte rendu s'ouvre dans le navigateur (« Imprimer » → "
             "« Enregistrer en PDF ») ; « Envoyer… » l'expédie par e-mail et/ou sur votre téléphone."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left", wraplength=670).pack(
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left", wraplength=theme.px(670)).pack(
             anchor="w", padx=12, pady=(10, 0))
 
         right = tk.Frame(outer, bg=theme.BG)
@@ -412,7 +412,7 @@ Coordonnées WGS84. Les azimuts lus au compas sont corrigés de la déclinaison 
         f.pack(fill="both", expand=True)
         tk.Label(f, text="Compte rendu :", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_BODY).grid(row=0, column=0, sticky="w")
         path_var = tk.StringVar(value=path)
-        tk.Label(f, textvariable=path_var, bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BODY, wraplength=460,
+        tk.Label(f, textvariable=path_var, bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BODY, wraplength=theme.px(460),
                  justify="left").grid(row=0, column=1, sticky="w", padx=8)
 
         def choose():
@@ -440,12 +440,12 @@ Coordonnées WGS84. Les azimuts lus au compas sont corrigés de la déclinaison 
             row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
         tk.Label(f, text=("Le fichier passe par le serveur ntfy.sh (gardé quelques heures, accessible à qui connaît "
                           "votre sujet ntfy). Décochez pour une mission sensible : seul le résumé partira."),
-                 bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=520, justify="left").grid(
+                 bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=theme.px(520), justify="left").grid(
             row=6, column=0, columnspan=3, sticky="w", padx=(24, 0))
         v_file = tk.BooleanVar(value=True)
         tk.Checkbutton(f, text="joindre le fichier", variable=v_file, **cb).grid(
             row=7, column=0, columnspan=3, sticky="w", padx=(24, 0))
-        status = tk.Label(f, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_BODY, wraplength=520,
+        status = tk.Label(f, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_BODY, wraplength=theme.px(520),
                           justify="left")
         status.grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 0))
         host, port = self._monitor_endpoint()

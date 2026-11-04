@@ -83,7 +83,7 @@ class Wx433Mixin:
                    command=lambda: webbrowser.open(f"https://aprs.fi/#!call={getattr(self, '_wx4_call', 'F4JCF-13')}")
                    ).pack(side="left")
         self.wx4_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
-                                   wraplength=1100, justify="left")
+                                   wraplength=theme.px(1100), justify="left")
         self.wx4_status.pack(anchor="w", pady=(6, 0))
         self._wx4_devices = []
         self._wx4_loaded = False

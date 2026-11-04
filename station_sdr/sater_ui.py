@@ -110,7 +110,7 @@ class SaterMixin:
     def _build_elt_panel(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=800)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(800))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
 
@@ -150,7 +150,7 @@ class SaterMixin:
                      values=("20", "30", "35", "40", "45", "49.6")).pack(side="left", padx=(4, 12))
         ttk.Button(cf, text="Appliquer", style="Flat.TButton", command=self._elt_apply).pack(side="left")
         self.elt_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                 justify="left", anchor="w", wraplength=760)
+                                 justify="left", anchor="w", wraplength=theme.px(760))
         self.elt_info.pack(anchor="w", pady=(6, 0))
 
         # Grand état + niveau
@@ -167,7 +167,7 @@ class SaterMixin:
                  bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(2, 2))
         wf = theme.card(left)
         wf.pack(fill="x", padx=12, pady=(0, 4))
-        self.elt_wf = tk.Canvas(wf.inner, height=160, bg="#05070f", highlightthickness=0)
+        self.elt_wf = tk.Canvas(wf.inner, height=theme.px(160), bg="#05070f", highlightthickness=0)
         self.elt_wf.pack(fill="x", padx=1, pady=1)
         self._elt_wf_img = None
         pb = tk.Frame(left, bg=theme.BG)
@@ -221,7 +221,7 @@ class SaterMixin:
             "Un aéronef en difficulté peut aussi parler sur 121,5 (fréquence de détresse aviation) : écouter "
             "les enregistrements. En cas de détection réelle hors exercice : prévenir l'ARCC Lyon "
             "(via le 112 / 196 en mer)."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left", wraplength=900,
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left", wraplength=theme.px(900),
         ).pack(anchor="w", pady=(8, 0))
 
         self._elt_status = None
@@ -590,7 +590,7 @@ class SaterMixin:
     def _build_gonio_panel(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=800)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(800))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
 
@@ -662,10 +662,10 @@ class SaterMixin:
         r.configure(padding=12)
         tk.Label(r, text="Zone probable", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
         self.g_result = tk.Label(r, text="Ajoutez au moins deux relèvements.", bg=theme.BG_CARD, fg=theme.MUTED,
-                                 font=("Segoe UI", 13, "bold"), justify="left", anchor="w", wraplength=760)
+                                 font=("Segoe UI", 13, "bold"), justify="left", anchor="w", wraplength=theme.px(760))
         self.g_result.pack(anchor="w", pady=(4, 0))
         self.g_detail = tk.Label(r, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
-                                 justify="left", anchor="w", wraplength=760)
+                                 justify="left", anchor="w", wraplength=theme.px(760))
         self.g_detail.pack(anchor="w", pady=(2, 6))
         rb = tk.Frame(r, bg=theme.BG_CARD)
         rb.pack(anchor="w")
@@ -679,7 +679,7 @@ class SaterMixin:
                                      command=self._gonio_copy_pos)
         self.g_copy_btn.pack(side="left")
         self.g_station = tk.Label(left, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_BODY,
-                                  justify="left", anchor="w", wraplength=770)
+                                  justify="left", anchor="w", wraplength=theme.px(770))
         self.g_station.pack(anchor="w", padx=12, pady=(2, 0))
         right = tk.Frame(outer, bg=theme.BG)
         right.pack(side="left", fill="both", expand=True, pady=(8, 12), padx=(0, 12))
@@ -695,7 +695,7 @@ class SaterMixin:
             "quand on approche). Des relèvements pris de points bien écartés (angles de croisement > 30°) "
             "donnent une zone plus petite. Les reliefs provoquent des réflexions : se méfier d'un relèvement "
             "isolé qui ne croise pas les autres."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=1000,
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(1000),
         ).pack(anchor="w", pady=(6, 0))
         self.g_map.add_right_click_menu_command("Prendre cette position pour le relèvement",
                                                 lambda ll: self._gonio_set_pos(ll), pass_coords=True)

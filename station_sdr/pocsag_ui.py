@@ -184,7 +184,7 @@ class PocsagMixin:
         d = det.inner
         d.configure(padding=12)
         self.pg_title = tk.Label(d, text="Sélectionnez un message.", bg=theme.BG_CARD, fg=theme.TEXT,
-                                 font=("Segoe UI", 12, "bold"), anchor="w", justify="left", wraplength=360)
+                                 font=("Segoe UI", 12, "bold"), anchor="w", justify="left", wraplength=theme.px(360))
         self.pg_title.pack(anchor="w")
         self.pg_text = tk.Text(d, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", 10), relief="flat",
                                wrap="word", width=44, height=16, padx=8, pady=6)
@@ -195,7 +195,7 @@ class PocsagMixin:
             "Écoute seule. DAPNET est le réseau de radiomessagerie des radioamateurs (1200 bauds, 439,9875 MHz). "
             "Les messages d'autres réseaux (services, entreprises) ne sont pas destinés au public : la loi interdit "
             "de les divulguer ou de les exploiter. Les messages restent en mémoire sur le Pi et ne sont pas enregistrés."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=1600,
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(1600),
         ).pack(anchor="w", padx=12, pady=(0, 8))
 
         self._pg_msgs = []

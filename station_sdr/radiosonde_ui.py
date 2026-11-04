@@ -20,7 +20,7 @@ class RadiosondeMixin:
     def _build_radiosonde_tab(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=820)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(820))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
         c = theme.card(left)
@@ -39,7 +39,7 @@ class RadiosondeMixin:
         ttk.Button(r, text="Écouter", style="Accent.TButton",
                    command=lambda: self._switch_sdr("radiosonde")).pack(side="right", padx=(0, 6))
         self.rs_info = tk.Label(h, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                justify="left", anchor="w", wraplength=780)
+                                justify="left", anchor="w", wraplength=theme.px(780))
         self.rs_info.pack(anchor="w", pady=(6, 0))
 
         tk.Label(left, text="Sondes reçues", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(
@@ -59,13 +59,13 @@ class RadiosondeMixin:
         d = theme.card(left)
         d.pack(fill="both", expand=True, padx=12, pady=(6, 6))
         self.rs_detail = tk.Label(d.inner, text="Sélectionnez une sonde.", bg=theme.BG_CARD, fg=theme.TEXT,
-                                  font=theme.FONT_BODY, justify="left", anchor="nw", wraplength=780, padx=12, pady=10)
+                                  font=theme.FONT_BODY, justify="left", anchor="nw", wraplength=theme.px(780), padx=12, pady=10)
         self.rs_detail.pack(fill="both", expand=True)
         tk.Label(left, text=(
             "Les radiosondes sont lâchées deux fois par jour (vers 00 h et 12 h UTC) par Météo-France, "
             "notamment à Nîmes et Ajaccio, et montent jusqu'à 30 km avant d'éclater et de redescendre sous "
             "parachute. auto_rx balaie 400–406 MHz, décode leur position et partage les données sur SondeHub."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=800).pack(
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(800)).pack(
             anchor="w", padx=12, pady=(0, 6))
 
         right = tk.Frame(outer, bg=theme.BG)

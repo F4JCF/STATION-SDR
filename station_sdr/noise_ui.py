@@ -43,7 +43,7 @@ class NoiseMixin:
         self._noise_canvas = tk.Canvas(body, bg=theme.BG_CARD, highlightthickness=0)
         self._noise_canvas.pack(side="left", fill="both", expand=True)
         self._noise_canvas.bind("<Configure>", lambda _e: self._noise_draw())
-        side = tk.Frame(body, bg=theme.BG, width=330)
+        side = tk.Frame(body, bg=theme.BG, width=theme.px(330))
         side.pack(side="left", fill="y", padx=(10, 0))
         side.pack_propagate(False)
         tk.Label(side, text="Dernier relevé", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
@@ -56,7 +56,7 @@ class NoiseMixin:
         tree.tag_configure("ok", foreground=theme.GREEN)
         tree.pack(fill="x", pady=(4, 8))
         self._noise_tree = tree
-        tk.Label(side, justify="left", wraplength=320, bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
+        tk.Label(side, justify="left", wraplength=theme.px(320), bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                  text=("Chaque nuit (03:30 par défaut), le Pi prend la clé SDR deux minutes et mesure le bruit "
                        "de fond (médiane, en dB relatifs, gain fixe) sur chaque bande, puis rend la clé.\n\n"
                        "Les valeurs ne sont comparables qu'à elles-mêmes : c'est l'évolution qui compte. "

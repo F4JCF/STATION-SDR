@@ -16,6 +16,21 @@ RED = "#f85149"
 ORANGE = "#d29922"
 BLUE = "#4aa3ff"
 
+# Échelle de l'affichage (1.0 = écran 1920×1080) : fixée au démarrage par
+# set_scale(), avant la création des fenêtres. Les polices suivent la mise à
+# l'échelle de Tk ; les dimensions en pixels passent par px().
+SCALE = 1.0
+
+
+def set_scale(s: float) -> None:
+    global SCALE
+    SCALE = max(0.6, min(2.0, float(s)))
+
+
+def px(v) -> int:
+    return max(1, int(round(v * SCALE)))
+
+
 FONT_TITLE = ("Segoe UI", 18, "bold")
 FONT_SUBTITLE = ("Segoe UI", 10)
 FONT_SECTION = ("Segoe UI", 12, "bold")
@@ -59,7 +74,7 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
     style.configure(
         "Treeview",
         background=BG_CARD, fieldbackground=BG_CARD, foreground=TEXT,
-        rowheight=26, borderwidth=0, font=FONT_BODY,
+        rowheight=px(26), borderwidth=0, font=FONT_BODY,
     )
     style.configure(
         "Treeview.Heading",

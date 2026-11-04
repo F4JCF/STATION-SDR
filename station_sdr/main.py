@@ -488,6 +488,7 @@ class _LineChart(tk.Canvas):
     sous-tension)."""
 
     def __init__(self, parent, title, unit, color, width=420, height=190):
+        width, height = theme.px(width), theme.px(height)
         super().__init__(parent, width=width, height=height, bg=theme.BG_CARD, highlightthickness=0)
         self.title, self.unit, self.color = title, unit, color
         self.points, self.bands, self.note = [], [], ""
@@ -624,6 +625,7 @@ class _Gauge(tk.Canvas):
     """Vu-mètre à aiguille (demi-cercle) avec zones vert / orange / rouge."""
 
     def __init__(self, parent, title, unit, vmin, vmax, warn, crit, width=210, height=150, bg=None):
+        width, height = theme.px(width), theme.px(height)
         super().__init__(parent, width=width, height=height, bg=bg or theme.BG_CARD, highlightthickness=0)
         self.title, self.unit, self.vmin, self.vmax = title, unit, vmin, vmax
         self.warn, self.crit = warn, crit
@@ -731,7 +733,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.report_callback_exception = self._on_callback_exception
         self.title(APP_TITLE)
         self.geometry("1040x680")
-        self.minsize(860, 560)
+        self.minsize(800, 520)
+        if plat.WINDOWS:
+            self.after(50, lambda: self.state("zoomed"))   # occupe tout l'écran au démarrage
         try:
             if plat.WINDOWS:
                 self.iconbitmap(default=_resource_path("assets/icon.ico"))
@@ -748,6 +752,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 pass
 
         self.config_data = load_config()
+        self._apply_ui_scale()
         self._stop_event = threading.Event()
         self._last_weather = {}
         self._last_services = {}
@@ -918,6 +923,31 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
     # ---------------------------------------------------------------- UI --
 
+    def _auto_ui_scale(self):
+        """Échelle d'après l'écran : 1.0 pour 1920×1080 (référence du dessin)."""
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        return max(0.7, min(1.6, min(sw / 1920, (sh - 40) / 1040)))
+
+    def _apply_ui_scale(self):
+        val = self.config_data.get("ui_scale", "auto")
+        try:
+            s = float(val) if val != "auto" else self._auto_ui_scale()
+        except (TypeError, ValueError):
+            s = self._auto_ui_scale()
+        theme.set_scale(s)
+        try:
+            base = float(self.tk.call("tk", "scaling"))
+            self.tk.call("tk", "scaling", base * theme.SCALE)   # toutes les polices suivent
+        except tk.TclError:
+            pass
+
+    def _set_ui_scale(self):
+        self.config_data["ui_scale"] = self._ui_scale_var.get()
+        save_config(self.config_data)
+        messagebox.showinfo("Taille de l'affichage",
+                            "La nouvelle taille s'appliquera au prochain démarrage de STATION-SDR.\n\n"
+                            "Quittez l'appli (menu STATION-SDR → Quitter) puis relancez-la.")
+
     def _build_menu(self):
         menubar = tk.Menu(self)
         app_menu = tk.Menu(menubar, tearoff=0)
@@ -929,6 +959,14 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                  command=self._toggle_alert_sound)
         app_menu.add_command(label="Historique des alertes", command=self._show_alert_history)
         app_menu.add_separator()
+        size_menu = tk.Menu(app_menu, tearoff=0)
+        self._ui_scale_var = tk.StringVar(value=str(self.config_data.get("ui_scale", "auto")))
+        for val, lab in (("auto", f"Automatique (écran {self.winfo_screenwidth()}×{self.winfo_screenheight()})"),
+                         ("0.8", "80 %"), ("0.9", "90 %"), ("1.0", "100 %"), ("1.1", "110 %"),
+                         ("1.25", "125 %"), ("1.5", "150 %")):
+            size_menu.add_radiobutton(label=lab, value=val, variable=self._ui_scale_var,
+                                      command=self._set_ui_scale)
+        app_menu.add_cascade(label="Taille de l'affichage", menu=size_menu)
         map_menu = tk.Menu(app_menu, tearoff=0)
         self._map_style_var = tk.StringVar(value=self.config_data.get("map_style", "osm"))
         for key, st in map_tiles.STYLES.items():
@@ -976,13 +1014,14 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 logo_img = ico.convert("RGBA")
             except Exception:
                 logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
-            logo_img = logo_img.resize((190, 190), Image.LANCZOS)
+            lg = theme.px(190)
+            logo_img = logo_img.resize((lg, lg), Image.LANCZOS)
             # Le logo est rond : on masque les coins (blancs) pour qu'il se
             # détache proprement sur le fond sombre.
             mask = Image.new("L", (560, 560), 0)
             ImageDraw.Draw(mask).ellipse([4, 4, 555, 555], fill=255)
-            mask = mask.resize((190, 190), Image.LANCZOS)
-            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (190, 190), 0), mask)
+            mask = mask.resize((lg, lg), Image.LANCZOS)
+            alpha = Image.composite(logo_img.getchannel("A"), Image.new("L", (lg, lg), 0), mask)
             logo_img.putalpha(alpha)
             self._header_logo_image = ImageTk.PhotoImage(logo_img)
             tk.Label(header, image=self._header_logo_image, bg=theme.BG).pack(side="left", padx=(0, 14))
@@ -1230,7 +1269,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             title_label.pack(side="left")
             subtitle_label = tk.Label(
                 inner, text=subtitle, bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                wraplength=225, justify="left",
+                wraplength=theme.px(225), justify="left",
             )
             subtitle_label.pack(anchor="w", pady=(2, 6))
             chip_label = theme.chip(inner, "—")
@@ -1454,7 +1493,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self._clear(frame)
         tk.Label(
             frame, text=f"Indisponible — {message}", bg=theme.BG, fg=theme.RED,
-            font=theme.FONT_BODY, wraplength=800, justify="left",
+            font=theme.FONT_BODY, wraplength=theme.px(800), justify="left",
         ).pack(anchor="w", padx=16, pady=16)
 
     # --------------------------------------------------------------- Météo --
@@ -1504,7 +1543,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         self.weather_metar_label = tk.Label(
             inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_MONO,
-            wraplength=420, justify="left",
+            wraplength=theme.px(420), justify="left",
         )
         self.weather_metar_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(14, 0))
 
@@ -1524,7 +1563,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             btn.pack(side="left", padx=(0, 4))
             self._weather_overlay_buttons[key] = btn
         self.weather_overlay_label = tk.Label(
-            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=240, justify="left",
+            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=theme.px(240), justify="left",
         )
         self.weather_overlay_label.pack(anchor="w", pady=(4, 0))
         self._lt_pending = (buttons_row, overlay_row)
@@ -1682,7 +1721,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         # Colonne de gauche (liste + fiche détaillée) et carte à droite,
         # comme tar1090.
-        wrapper = tk.Frame(outer_wrapper, bg=theme.BG, width=780)
+        wrapper = tk.Frame(outer_wrapper, bg=theme.BG, width=theme.px(780))
         wrapper.pack(side="left", fill="y", pady=(0, 6))
         wrapper.pack_propagate(False)
 
@@ -1704,7 +1743,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         ).pack(side="right")
 
         self.adsb_rx_label = tk.Label(wrapper, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                      anchor="w", justify="left", wraplength=750)
+                                      anchor="w", justify="left", wraplength=theme.px(750))
         self.adsb_rx_label.pack(fill="x", padx=12, pady=(0, 4))
         search_row = tk.Frame(wrapper, bg=theme.BG)
         search_row.pack(fill="x", padx=12, pady=(0, 4))
@@ -1775,13 +1814,13 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                             font=("Consolas", 10), anchor="w")
         self.aircraft_detail_hex.pack(side="left", padx=(6, 0))
         self.aircraft_detail_airline = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.TEXT,
-                                                font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=720)
+                                                font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=theme.px(720))
         self.aircraft_detail_airline.pack(anchor="w", pady=(2, 0))
         self.aircraft_detail_route = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.ACCENT,
-                                              font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=720)
+                                              font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=theme.px(720))
         self.aircraft_detail_route.pack(anchor="w", pady=(2, 0))
         self.aircraft_detail_enriched = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.MUTED,
-                                                 font=theme.FONT_SUBTITLE, anchor="w", justify="left", wraplength=720)
+                                                 font=theme.FONT_SUBTITLE, anchor="w", justify="left", wraplength=theme.px(720))
         self.aircraft_detail_enriched.pack(anchor="w", pady=(2, 0))
 
         grid = tk.Frame(d, bg=theme.BG_CARD)
@@ -2376,7 +2415,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
     def _build_aprs_tab(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=860)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(860))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
 
@@ -2756,7 +2795,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         outer_wrapper = tk.Frame(frame, bg=theme.BG)
         outer_wrapper.pack(fill="both", expand=True, padx=4, pady=4)
 
-        left = tk.Frame(outer_wrapper, bg=theme.BG, width=640)
+        left = tk.Frame(outer_wrapper, bg=theme.BG, width=theme.px(640))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
 
@@ -2782,7 +2821,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         self.ais_count_label = tk.Label(
             left, text="Navires : —", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION,
-            anchor="w", justify="left", wraplength=610,
+            anchor="w", justify="left", wraplength=theme.px(610),
         )
         self.ais_count_label.pack(anchor="w", padx=12, pady=(0, 4))
 
@@ -3168,7 +3207,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.svx_warn_outer = theme.card(wrapper)
         self.svx_warn_label = tk.Label(
             self.svx_warn_outer.inner, text="", bg=theme.BG_CARD, fg=theme.ORANGE, font=theme.FONT_BODY,
-            justify="left", anchor="w", wraplength=1100,
+            justify="left", anchor="w", wraplength=theme.px(1100),
         )
         self.svx_warn_label.pack(anchor="w", padx=14, pady=10)
         self._svx_warn_shown = False
@@ -3189,8 +3228,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.svx_conn_tree = ttk.Treeview(left, columns=("call", "since"), show="headings", height=6)
         self.svx_conn_tree.heading("call", text="Indicatif")
         self.svx_conn_tree.heading("since", text="Connecté depuis")
-        self.svx_conn_tree.column("call", width=140, anchor="w")
-        self.svx_conn_tree.column("since", width=120, anchor="center")
+        self.svx_conn_tree.column("call", width=theme.px(140), anchor="w")
+        self.svx_conn_tree.column("since", width=theme.px(120), anchor="center")
         self.svx_conn_tree.pack(fill="both", expand=True, pady=(8, 8))
         self.svx_last_label = tk.Label(
             left, text="Dernière station : —", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, anchor="w",
@@ -3205,8 +3244,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.svx_events_tree = ttk.Treeview(right, columns=("time", "event"), show="headings", height=12)
         self.svx_events_tree.heading("time", text="Heure")
         self.svx_events_tree.heading("event", text="Événement")
-        self.svx_events_tree.column("time", width=130, anchor="center")
-        self.svx_events_tree.column("event", width=420, anchor="w")
+        self.svx_events_tree.column("time", width=theme.px(130), anchor="center")
+        self.svx_events_tree.column("event", width=theme.px(420), anchor="w")
         vsb = ttk.Scrollbar(right, orient="vertical", command=self.svx_events_tree.yview)
         self.svx_events_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y", pady=(8, 0))
@@ -3402,7 +3441,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         tk.Label(head, text=f"⚠  {title}", bg=theme.RED, fg="#0b0f17", font=("Segoe UI", 14, "bold"),
                  padx=16, pady=10).pack(anchor="w")
         tk.Label(win, text=text, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY, justify="left",
-                 wraplength=460, padx=16, pady=14).pack(anchor="w")
+                 wraplength=theme.px(460), padx=16, pady=14).pack(anchor="w")
         tk.Label(win, text=time.strftime("Le %d/%m/%Y à %H:%M:%S"), bg=theme.BG_CARD, fg=theme.MUTED,
                  font=theme.FONT_SUBTITLE, padx=16).pack(anchor="w")
         row = tk.Frame(win, bg=theme.BG_CARD)
@@ -3466,7 +3505,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 "illicite) et états d'urgence ADS-B  ·  balises AIS SART / EPIRB / homme à la mer  ·  messages APRS "
                 "adressés à F4JCF  ·  nouveaux courriers Winlink  ·  vigilance Météo-France orange ou rouge (06).\nAvion et AIS ne sont surveillés que lorsque leur "
                 "module détient la clé SDR (voir la page Clé SDR pour le partage automatique)."
-            ), bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=1300,
+            ), bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=theme.px(1300),
         ).pack(anchor="w", padx=14, pady=10)
 
         self._build_notify_card(wrapper)
@@ -3647,9 +3686,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             tree.heading("date", text="Date")
             tree.heading("who", text="De" if box == "in" else "À")
             tree.heading("subject", text="Objet")
-            tree.column("date", width=110, anchor="center")
-            tree.column("who", width=110, anchor="w")
-            tree.column("subject", width=300, anchor="w")
+            tree.column("date", width=theme.px(110), anchor="center")
+            tree.column("who", width=theme.px(110), anchor="w")
+            tree.column("subject", width=theme.px(300), anchor="w")
             tree.tag_configure("unread", foreground=theme.ACCENT)
             tree.pack(fill="both", expand=True, pady=(8, 0))
             tree.bind("<Double-1>", lambda _e, b=box: self._winlink_open_message(b))
@@ -3848,7 +3887,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.vigi_rows = tk.Frame(f, bg=theme.BG_CARD)
         self.vigi_rows.pack(anchor="w", fill="x", pady=(8, 0))
         self.vigi_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
-                                    wraplength=560, justify="left")
+                                    wraplength=theme.px(560), justify="left")
         self.vigi_status.pack(anchor="w", pady=(6, 0))
         key_row = tk.Frame(f, bg=theme.BG_CARD)
         self.vigi_key_row = key_row
@@ -3900,7 +3939,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 tk.Label(row, text=f"  {name}  ", bg=color, fg="#0b0f17", font=theme.FONT_CHIP).pack(side="left")
                 phen = ", ".join(f"{p['name']} ({p['color_name']})" for p in per.get("phenomena") or [])
                 tk.Label(row, text=phen or "pas de vigilance particulière", bg=theme.BG_CARD, fg=theme.MUTED,
-                         font=theme.FONT_SUBTITLE, wraplength=300, justify="left").pack(side="left", padx=(8, 0))
+                         font=theme.FONT_SUBTITLE, wraplength=theme.px(300), justify="left").pack(side="left", padx=(8, 0))
             fetched = data.get("fetched_at")
             self.vigi_status.config(
                 text=f"Mise à jour Météo-France : {time.strftime('%H:%M', time.localtime(fetched))}" if fetched else "",
@@ -3990,15 +4029,15 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             charts.grid_rowconfigure(r, weight=1, uniform="row")
             outer = theme.card(charts)
             outer.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
-            ch = _LineChart(outer.inner, title, unit, color, height=120)
+            ch = _LineChart(outer.inner, title, unit, color, height=theme.px(120))
             ch.pack(fill="both", expand=True, padx=6, pady=6)
             self.stats_charts[key] = ch
 
-        side = tk.Frame(body, bg=theme.BG, width=330)
+        side = tk.Frame(body, bg=theme.BG, width=theme.px(330))
         side.pack(side="left", fill="y", padx=(8, 0))
         side.pack_propagate(False)
         self.stats_share = tk.Label(side, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                    justify="left", wraplength=320)
+                                    justify="left", wraplength=theme.px(320))
         self.stats_share.pack(side="bottom", anchor="w", pady=(6, 0))
         self.stats_polars = {}
         for kind, title, color in (("adsb", "Polaire de portée ADS-B", "#f0b429"), ("ais", "Polaire de portée AIS", "#06b6d4")):
@@ -4125,7 +4164,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         tk.Label(f, text=(
             "Téléphone : installez l'appli gratuite « ntfy » (Android / iPhone), abonnez-vous au sujet indiqué "
             "ci-dessous (choisissez un nom difficile à deviner, il fait office de mot de passe)."),
-            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=1300,
+            bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=theme.px(1300),
         ).grid(row=1, column=0, columnspan=8, sticky="w", pady=(4, 8))
 
         def lab(r, c, t):
@@ -4349,7 +4388,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
     def _build_b406_panel(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=800)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(800))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
 
@@ -4367,7 +4406,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         ttk.Button(row, text="Écouter le 406 MHz", style="Accent.TButton",
                    command=lambda: self._switch_sdr("beacon")).pack(side="right", padx=(0, 8))
         self.b406_info = tk.Label(st, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                  justify="left", anchor="w", wraplength=760)
+                                  justify="left", anchor="w", wraplength=theme.px(760))
         self.b406_info.pack(anchor="w", pady=(6, 0))
 
         tk.Label(left, text="Balises entendues (une ligne par balise)", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_SECTION).pack(
@@ -4404,10 +4443,10 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         d.configure(padding=10)
         self.b406_title = tk.Label(d, text="Sélectionnez une trame pour voir son décodage complet.", bg=theme.BG_CARD,
                                    fg=theme.TEXT, font=("Segoe UI", 13, "bold"), anchor="w", justify="left",
-                                   wraplength=760)
+                                   wraplength=theme.px(760))
         self.b406_title.pack(anchor="w")
         self.b406_where = tk.Label(d, text="", bg=theme.BG_CARD, fg=theme.ACCENT, font=theme.FONT_BODY_BOLD,
-                                   anchor="w", justify="left", wraplength=760)
+                                   anchor="w", justify="left", wraplength=theme.px(760))
         self.b406_where.pack(anchor="w", pady=(4, 0))
         btns = tk.Frame(d, bg=theme.BG_CARD)
         btns.pack(anchor="w", pady=(6, 6))
@@ -4446,7 +4485,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             "Écoute seule. Une balise émet une salve d'environ 0,5 s toutes les 50 s. Trame RÉELLE (hors mode "
             "test) : une alerte de détresse est peut-être en cours — les secours sont normalement déjà alertés "
             "par satellite ; en cas de doute, prévenir le CROSS (196) ou le 112."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=900,
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(900),
         ).pack(anchor="w", pady=(6, 0))
 
         self._b406_frames = []
@@ -4739,9 +4778,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         det.pack(side="left", fill="y", padx=(10, 0))
         d = det.inner
         d.configure(padding=12)
-        d.configure(width=380)
+        d.configure(width=theme.px(380))
         self.s433_title = tk.Label(d, text="Sélectionnez un capteur.", bg=theme.BG_CARD, fg=theme.TEXT,
-                                   font=("Segoe UI", 13, "bold"), anchor="w", justify="left", wraplength=360)
+                                   font=("Segoe UI", 13, "bold"), anchor="w", justify="left", wraplength=theme.px(360))
         self.s433_title.pack(anchor="w")
         tk.Label(d, text="Double-clic sur une ligne pour donner un nom au capteur.", bg=theme.BG_CARD, fg=theme.MUTED,
                  font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 8))
@@ -4893,7 +4932,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
     def _build_sat_tab(self, frame):
         outer = tk.Frame(frame, bg=theme.BG)
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        left = tk.Frame(outer, bg=theme.BG, width=820)
+        left = tk.Frame(outer, bg=theme.BG, width=theme.px(820))
         left.pack(side="left", fill="y", pady=(0, 6))
         left.pack_propagate(False)
 
@@ -4915,7 +4954,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                  "(145,825 MHz) puis la rendre au module précédent", variable=self.sat_auto_var,
                        command=self._sat_toggle_auto, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
                        activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_SUBTITLE,
-                       highlightthickness=0, wraplength=760, justify="left").pack(anchor="w")
+                       highlightthickness=0, wraplength=theme.px(760), justify="left").pack(anchor="w")
         ttk.Button(opt, text="Écouter l'APRS de l'ISS maintenant", style="Flat.TButton",
                    command=lambda: self._switch_sdr("iss")).pack(anchor="w", pady=(4, 0))
 
@@ -4958,7 +4997,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         det.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         d = det.inner
         d.configure(padding=8)
-        self.sat_polar = tk.Canvas(d, width=250, height=250, bg=theme.BG_CARD, highlightthickness=0)
+        self.sat_polar = tk.Canvas(d, width=theme.px(250), height=theme.px(250), bg=theme.BG_CARD, highlightthickness=0)
         self.sat_polar.pack(side="left")
         info = tk.Frame(d, bg=theme.BG_CARD)
         info.pack(side="left", fill="both", expand=True, padx=(10, 0))
@@ -4966,7 +5005,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                       font=("Segoe UI", 13, "bold"), anchor="w")
         self.sat_det_title.pack(anchor="w")
         self.sat_det_freq = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.ACCENT, font=theme.FONT_SUBTITLE,
-                                     anchor="w", justify="left", wraplength=500)
+                                     anchor="w", justify="left", wraplength=theme.px(500))
         self.sat_det_freq.pack(anchor="w", pady=(2, 6))
         self.sat_det_text = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.TEXT, font=("Consolas", 9),
                                      anchor="nw", justify="left")
@@ -5641,7 +5680,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.health_power_value = tk.Label(p, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 20, "bold"))
         self.health_power_value.pack(anchor="w", pady=(4, 2))
         self.health_power_detail = tk.Label(
-            p, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left", wraplength=1200,
+            p, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left", wraplength=theme.px(1200),
         )
         self.health_power_detail.pack(anchor="w")
 
@@ -5704,7 +5743,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         ttk.Button(upd_row, text="Partage vers les réseaux…", style="Accent.TButton",
                    command=self._open_feeds_window).pack(side="left", padx=(8, 0))
         self.health_version_label = tk.Label(upd_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
-                                             justify="left", wraplength=900)
+                                             justify="left", wraplength=theme.px(900))
         self.health_version_label.pack(side="left", padx=(12, 0))
         bk_row = tk.Frame(m, bg=theme.BG_CARD)
         bk_row.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
@@ -5716,10 +5755,10 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                    command=lambda: threading.Thread(target=self._auto_backup_run, args=(True,),
                                                     daemon=True).start()).pack(side="left", padx=(6, 0))
         self.health_watch_label = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                           justify="left", wraplength=1300)
+                                           justify="left", wraplength=theme.px(1300))
         self.health_watch_label.grid(row=4, column=0, columnspan=6, sticky="w", pady=(6, 0))
         self.health_maint_status = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
-                                            justify="left", wraplength=1300)
+                                            justify="left", wraplength=theme.px(1300))
         self.health_maint_status.grid(row=5, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
     def _pi_endpoint(self):
