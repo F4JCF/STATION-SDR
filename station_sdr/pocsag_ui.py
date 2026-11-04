@@ -16,6 +16,84 @@ def _ftxt(f):
     return f"{float(f):.4f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
+# --- Détection des messages probablement corrompus (qualité de réception) ---
+# Le code BCH de POCSAG corrige 1 à 2 bits par mot de code ; au-delà, des
+# caractères faux passent (ex. « VSAV » reçu « rUaV »). Ces heuristiques ne
+# touchent que les messages texte et servent d'indicateur de réception.
+_ODD_CHARS = set("`{|}~^\\")
+_ROLE_TOKENS = {"CA", "CE", "COND", "EQ", "CDG", "CU", "SAP", "CHEF", "EQU", "STAG"}
+
+
+def _is_text(m):
+    t = (m.get("type") or "").lower()
+    return bool(m.get("text")) and not t.startswith(("num", "ton"))
+
+
+def _odd_reason(text):
+    """Raison si le texte contient des caractères anormaux, sinon None."""
+    if any((ord(c) < 32 and c not in "\n\r\t") or ord(c) > 126 or c in _ODD_CHARS for c in text):
+        return "caractère de contrôle ou inattendu"
+    letters = [c for c in text if c.isalpha()]
+    low = sum(1 for c in letters if c.islower())
+    if len(letters) >= 6 and 0 < low <= 0.25 * len(letters):
+        return "minuscules isolées dans un message en majuscules"
+    return None
+
+
+def _odd_score(token):
+    return sum(1 for c in token if c.islower() or c in _ODD_CHARS or ord(c) < 32 or ord(c) > 126)
+
+
+def _core_tokens(text):
+    return [t for t in text.split() if t.upper() not in _ROLE_TOKENS]
+
+
+def pocsag_suspects(msgs, window=3.0):
+    """Renvoie {id(message): raison} pour les messages probablement mal reçus :
+    caractères anormaux, ou texte qui diffère de quelques lettres d'un
+    doublon reçu au même moment sur un autre RIC (rôle CA/EQ/COND ignoré)."""
+    out = {}
+    txt = sorted((m for m in msgs or [] if _is_text(m)), key=lambda m: m.get("time") or 0)
+    for m in txt:
+        r = _odd_reason(m["text"])
+        if r:
+            out[id(m)] = r
+    for i, a in enumerate(txt):
+        ta = _core_tokens(a["text"])
+        for b in txt[i + 1:]:
+            if (b.get("time") or 0) - (a.get("time") or 0) > window:
+                break
+            if b.get("ric") == a.get("ric"):
+                continue
+            tb = _core_tokens(b["text"])
+            if len(ta) != len(tb) or ta == tb:
+                continue
+            diff = [(x, y) for x, y in zip(ta, tb) if x != y]
+            # Même structure, 1 à 2 mots de même longueur qui changent : altération.
+            if not diff or len(diff) > 2 or any(len(x) != len(y) for x, y in diff):
+                continue
+            sa = sum(_odd_score(x) for x, _ in diff)
+            sb = sum(_odd_score(y) for _, y in diff)
+            why = "diffère d'un doublon reçu au même instant"
+            if sa > sb:
+                out.setdefault(id(a), why + f" (« {' '.join(y for _, y in diff)} » attendu ?)")
+            elif sb > sa:
+                out.setdefault(id(b), why + f" (« {' '.join(x for x, _ in diff)} » attendu ?)")
+            else:
+                # Vote : la version partagée par le plus de destinataires est la bonne.
+                t0 = a.get("time") or 0
+                near = [_core_tokens(c["text"]) for c in txt if abs((c.get("time") or 0) - t0) <= window]
+                va, vb = near.count(ta), near.count(tb)
+                if va > vb:
+                    out.setdefault(id(b), why + f" (« {' '.join(x for x, _ in diff)} » attendu ?)")
+                elif vb > va:
+                    out.setdefault(id(a), why + f" (« {' '.join(y for _, y in diff)} » attendu ?)")
+                else:
+                    out.setdefault(id(a), why)
+                    out.setdefault(id(b), why)
+    return out
+
+
 class PocsagMixin:
     def _pocsag_endpoint(self):
         return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_pocsag", 5012)
@@ -94,6 +172,7 @@ class PocsagMixin:
             self.pg_tree.column(c, width=w, minwidth=40, anchor=a, stretch=(c == "text"))
         self.pg_tree.tag_configure("watch", background="#5a3a12", foreground="#ffffff")
         self.pg_tree.tag_configure("tech", foreground=theme.MUTED)
+        self.pg_tree.tag_configure("suspect", foreground="#ffb3b3")
         vsb = ttk.Scrollbar(tbl.inner, orient="vertical", command=self.pg_tree.yview)
         self.pg_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -121,6 +200,7 @@ class PocsagMixin:
 
         self._pg_msgs = []
         self._pg_shown = []
+        self._pg_suspects = {}
         self._pg_conf_loaded = False
         self._pocsag_poll_running = False
 
@@ -227,16 +307,25 @@ class PocsagMixin:
             m = self._pg_shown[int(sel[0])]
             sel_key = (m.get("time"), m.get("ric"))
         self._pg_shown = shown
+        self._pg_suspects = pocsag_suspects(self._pg_msgs)
         tree = self.pg_tree
         tree.delete(*tree.get_children())
         for i, m in enumerate(shown[:500]):
             tags = ("watch",) if m.get("watch") else ("tech",) if m.get("tech") else ()
+            bad = id(m) in self._pg_suspects
+            if bad:
+                tags = tags + ("suspect",)
             tree.insert("", "end", iid=str(i), tags=tags, values=(
                 time.strftime("%d/%m %H:%M:%S", time.localtime(m.get("time") or 0)), m.get("rate"), m.get("ric"),
-                m.get("function"), m.get("type"), (m.get("text") or "(tonalité seule)").replace("\n", " ⏎ ")))
+                m.get("function"), f"{m.get('type')} ⚠" if bad else m.get("type"),
+                (m.get("text") or "(tonalité seule)").replace("\n", " ⏎ ")))
             if sel_key == (m.get("time"), m.get("ric")):
                 tree.selection_set(str(i))
-        self.pg_count.config(text=f"{len(shown)} message(s)")
+        nbad = sum(1 for m in shown if id(m) in self._pg_suspects)
+        ntxt = sum(1 for m in shown if _is_text(m))
+        self.pg_count.config(text=f"{len(shown)} message(s)" + (
+            f" · ⚠ {nbad} probablement mal reçu(s) sur {ntxt} texte(s) ({100 * nbad // ntxt} %)"
+            if nbad and ntxt else ""), fg=theme.ORANGE if nbad else theme.MUTED)
 
     def _pocsag_select(self, _e=None):
         sel = self.pg_tree.selection()
@@ -250,6 +339,10 @@ class PocsagMixin:
         self.pg_text.config(state="normal")
         self.pg_text.delete("1.0", "end")
         self.pg_text.insert("1.0", m.get("text") or "(tonalité seule, sans texte)")
+        why = getattr(self, "_pg_suspects", {}).get(id(m))
+        if why:
+            self.pg_text.insert("end", f"\n\n⚠ Probablement mal reçu : {why}.\n"
+                                "Signal faible ou saturé : essayez un autre gain ou repositionnez l'antenne.")
         self.pg_text.config(state="disabled")
 
     def _pocsag_copy(self):
