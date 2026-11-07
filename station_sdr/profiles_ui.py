@@ -104,7 +104,7 @@ class ProfilesMixin:
             tk.Label(f, text=lab, bg=theme.BG, fg=theme.MUTED, font=theme.FONT_BODY).grid(
                 row=i, column=0, sticky="w", pady=2)
             ttk.Entry(f, textvariable=ev[k], width=40).grid(row=i, column=1, columnspan=3, sticky="w", pady=2, padx=6)
-        tk.Label(f, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(600),
+        tk.Label(f, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(600),
                  text=("Pour un Pi emporté en mission : son adresse sur le réseau du terrain (partage de connexion du "
                        "téléphone, routeur 4G…) ou son adresse dans le VPN. La position sert au compte rendu et à la "
                        "goniométrie.")).grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 6))

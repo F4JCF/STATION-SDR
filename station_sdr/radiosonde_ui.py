@@ -65,7 +65,7 @@ class RadiosondeMixin:
             "Les radiosondes sont lâchées deux fois par jour (vers 00 h et 12 h UTC) par Météo-France, "
             "notamment à Nîmes et Ajaccio, et montent jusqu'à 30 km avant d'éclater et de redescendre sous "
             "parachute. auto_rx balaie 400–406 MHz, décode leur position et partage les données sur SondeHub."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(800)).pack(
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(800)).pack(
             anchor="w", padx=12, pady=(0, 6))
 
         right = tk.Frame(outer, bg=theme.BG)

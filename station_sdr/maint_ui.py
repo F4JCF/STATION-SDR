@@ -44,7 +44,7 @@ class MaintMixin:
         self._mod_list.pack(fill="x", padx=14, pady=8)
         tk.Label(win, text="Déroulement de l'installation :", bg=theme.BG, fg=theme.TEXT,
                  font=theme.FONT_BODY_BOLD).pack(anchor="w", padx=14)
-        self._mod_log = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", 9), relief="flat",
+        self._mod_log = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", theme.fs(9)), relief="flat",
                                 height=14, wrap="word", padx=8, pady=6)
         self._mod_log.pack(fill="both", expand=True, padx=14, pady=(4, 12))
         self._mod_log.config(state="disabled")
@@ -85,7 +85,7 @@ class MaintMixin:
             row.pack(fill="x", pady=2)
             ok = m.get("installed")
             tk.Label(row, text="●", bg=theme.BG_CARD, fg=theme.GREEN if ok else theme.MUTED,
-                     font=("Segoe UI", 12)).pack(side="left", padx=(10, 6), pady=6)
+                     font=("Segoe UI", theme.fs(12))).pack(side="left", padx=(10, 6), pady=6)
             tk.Label(row, text=m.get("label"), bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY,
                      width=52, anchor="w").pack(side="left")
             tk.Label(row, text="installé" if ok else "non installé", bg=theme.BG_CARD,
@@ -283,14 +283,14 @@ class FeedsMixin:
         entry(f, "udp1", "Sortie UDP 1 (hôte:port, ex. AISHub) :")
         entry(f, "udp2", "Sortie UDP 2 (hôte:port, ex. MarineTraffic) :")
         tk.Label(f, text=("AISHub et MarineTraffic donnent l'adresse et le port à saisir après inscription de "
-                          "votre station sur leur site."), bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+                          "votre station sur leur site."), bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)),
                  wraplength=theme.px(820), justify="left").pack(anchor="w")
 
         f = card("APRS VHF 144,800")
         check(f, "aprs_igate", "iGate réception seule vers APRS-IS (aprs.fi) — rien n'est émis")
         entry(f, "igate_call", "Indicatif de l'iGate VHF :", 12)
         tk.Label(f, text="Différent de F4JCF-10, déjà utilisé par l'iGate LoRa (par exemple F4JCF-1).",
-                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8))).pack(anchor="w")
 
         bar = tk.Frame(win, bg=theme.BG)
         bar.pack(fill="x", pady=8, **pad)

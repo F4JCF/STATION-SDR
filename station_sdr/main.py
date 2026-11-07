@@ -516,7 +516,7 @@ class _LineChart(tk.Canvas):
         last = next((v for _t, v in reversed(self.points) if v is not None), None)
         head = self.title + (f"   ·   max {max(vals):.0f} {self.unit}   ·   actuel {last:.0f} {self.unit}"
                              if vals and last is not None else "")
-        self.create_text(8, 10, text=head, anchor="w", fill=theme.TEXT, font=("Segoe UI", 9, "bold"))
+        self.create_text(8, 10, text=head, anchor="w", fill=theme.TEXT, font=("Segoe UI", theme.fs(9), "bold"))
         pw, ph = w - left - right, h - top - bottom
         self.create_rectangle(left, top, left + pw, top + ph, outline=theme.BORDER)
         if not self.t0 or not self.t1 or self.t1 <= self.t0:
@@ -541,12 +541,12 @@ class _LineChart(tk.Canvas):
             y = Y(v)
             self.create_line(left, y, left + pw, y, fill=theme.BORDER, dash=(2, 4))
             self.create_text(left - 4, y, text=f"{v:.0f}" if ymax >= 10 else f"{v:g}", anchor="e",
-                             fill=theme.MUTED, font=("Segoe UI", 8))
+                             fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
         fmt = "%H:%M" if span <= 2 * 86400 else "%d/%m"
         for i in range(5):
             t = self.t0 + span * i / 4
             self.create_text(X(t), top + ph + 12, text=time.strftime(fmt, time.localtime(t)),
-                             fill=theme.MUTED, font=("Segoe UI", 8))
+                             fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
         seg, prev_t = [], None
         gap = max(300, span / 150)
         for t, v in self.points:
@@ -595,19 +595,19 @@ class _PolarChart(tk.Canvas):
         cx, cy, r = max(self.winfo_width(), s) / 2, s / 2 + 24, s / 2 - 26
         vals = [v for v in self.sectors if v]
         vmax = max(vals) if vals else 0
-        self.create_text(8, 10, anchor="w", fill=theme.TEXT, font=("Segoe UI", 9, "bold"),
+        self.create_text(8, 10, anchor="w", fill=theme.TEXT, font=("Segoe UI", theme.fs(9), "bold"),
                          text=self.title + (f"   ·   max {vmax:.0f} km" if vmax else ""))
         scale_max = max(10, math.ceil(vmax / 50) * 50) if vmax else 50
         for i in range(1, 5):
             rr = r * i / 4
             self.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=theme.BORDER)
             self.create_text(cx + 3, cy - rr + 7, text=f"{scale_max * i / 4:.0f}", anchor="w",
-                             fill=theme.MUTED, font=("Segoe UI", 7))
+                             fill=theme.MUTED, font=("Segoe UI", theme.fs(7)))
         for ang, lab in ((0, "N"), (90, "E"), (180, "S"), (270, "O")):
             a = math.radians(ang)
             self.create_line(cx, cy, cx + r * math.sin(a), cy - r * math.cos(a), fill=theme.BORDER)
             self.create_text(cx + (r + 11) * math.sin(a), cy - (r + 11) * math.cos(a), text=lab,
-                             fill=theme.MUTED, font=("Segoe UI", 8, "bold"))
+                             fill=theme.MUTED, font=("Segoe UI", theme.fs(8), "bold"))
         if not vals:
             self.create_text(cx, cy, text="aucune donnée", fill=theme.MUTED, font=theme.FONT_SUBTITLE)
             return
@@ -655,7 +655,7 @@ class _Gauge(tk.Canvas):
         cx, cy = self.w / 2, self.h - 40
         r = min(self.w / 2 - 14, self.h - 66)
         box = (cx - r, cy - r, cx + r, cy + r)
-        self.create_text(cx, 10, text=self.title, fill=theme.MUTED, font=("Segoe UI", 9, "bold"))
+        self.create_text(cx, 10, text=self.title, fill=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold"))
         zones = ((self.vmin, self.warn, theme.GREEN), (self.warn, self.crit, theme.ORANGE), (self.crit, self.vmax, theme.RED))
         for lo, hi, col in zones:
             a0, a1 = self._angle(lo), self._angle(hi)
@@ -675,9 +675,9 @@ class _Gauge(tk.Canvas):
             col = theme.RED if self.value >= self.crit else theme.ORANGE if self.value >= self.warn else theme.GREEN
             txt = f"{self.value:.0f} {self.unit}"
         self.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=theme.TEXT, outline="")
-        self.create_text(cx, cy + 15, text=txt, fill=col, font=("Segoe UI", 13, "bold"))
+        self.create_text(cx, cy + 15, text=txt, fill=col, font=("Segoe UI", theme.fs(13), "bold"))
         if self.subtitle:
-            self.create_text(cx, cy + 31, text=self.subtitle, fill=theme.MUTED, font=("Segoe UI", 8))
+            self.create_text(cx, cy + 31, text=self.subtitle, fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
 
 
 class _TileChip:
@@ -904,7 +904,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         """Carte avec le fond choisi (OpenStreetMap, Plan IGN, photos IGN)
         et la mention de source obligatoire en bas à droite."""
         m = TkinterMapView(parent, corner_radius=0)
-        credit = tk.Label(parent, text="", bg="#ffffff", fg="#333333", font=("Segoe UI", 7), padx=3)
+        credit = tk.Label(parent, text="", bg="#ffffff", fg="#333333", font=("Segoe UI", theme.fs(7)), padx=3)
         credit.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
         m._credit_label = credit
         self._all_maps.append(m)
@@ -943,11 +943,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         except (TypeError, ValueError):
             s = self._auto_ui_scale()
         theme.set_scale(s)
-        try:
-            base = float(self.tk.call("tk", "scaling"))
-            self.tk.call("tk", "scaling", base * theme.SCALE)   # toutes les polices suivent
-        except tk.TclError:
-            pass
+        theme.scale_named_fonts(self)
 
     def _set_ui_scale(self):
         self.config_data["ui_scale"] = self._ui_scale_var.get()
@@ -1022,7 +1018,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 logo_img = ico.convert("RGBA")
             except Exception:
                 logo_img = Image.open(_resource_path("assets/logo.png")).convert("RGBA")
-            lg = theme.px(190)
+            lg = theme.px(190 if theme.SCALE >= 0.9 else 150)   # écran bas : en-tête plus compact
             logo_img = logo_img.resize((lg, lg), Image.LANCZOS)
             # Le logo est rond : on masque les coins (blancs) pour qu'il se
             # détache proprement sur le fond sombre.
@@ -1151,13 +1147,13 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         power = tk.Frame(row, bg=theme.BG_CARD)
         power.grid(row=0, column=len(specs), padx=(16, 6), sticky="nsew")
         row.grid_columnconfigure(len(specs), weight=1)
-        tk.Label(power, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(2, 6))
+        tk.Label(power, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w", pady=(2, 6))
         led_row = tk.Frame(power, bg=theme.BG_CARD)
         led_row.pack(anchor="w")
         self.home_power_led = tk.Canvas(led_row, width=34, height=34, bg=theme.BG_CARD, highlightthickness=0)
         self.home_power_led.pack(side="left")
         self._home_led_item = self.home_power_led.create_oval(3, 3, 31, 31, fill=theme.MUTED, outline="")
-        self.home_power_text = tk.Label(led_row, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 13, "bold"))
+        self.home_power_text = tk.Label(led_row, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(13), "bold"))
         self.home_power_text.pack(side="left", padx=(10, 0))
         self.home_power_sub = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
         self.home_power_sub.pack(anchor="w", pady=(8, 0))
@@ -1166,8 +1162,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         # Bouton d'arrêt / relance de la clé SDR, directement sur l'accueil
         key_col = tk.Frame(row, bg=theme.BG_CARD)
         key_col.grid(row=0, column=len(specs) + 1, padx=(10, 6), sticky="ns")
-        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(2, 6))
-        self.home_key_label = tk.Label(key_col, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 13, "bold"))
+        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w", pady=(2, 6))
+        self.home_key_label = tk.Label(key_col, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(13), "bold"))
         self.home_key_label.pack(anchor="w")
         self.home_key_button = tk.Button(
             key_col, text="■  Arrêter la clé SDR", font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
@@ -1574,7 +1570,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             btn.pack(side="left", padx=(0, 4))
             self._weather_overlay_buttons[key] = btn
         self.weather_overlay_label = tk.Label(
-            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=theme.px(240), justify="left",
+            overlay_row, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), wraplength=theme.px(240), justify="left",
         )
         self.weather_overlay_label.pack(anchor="w", pady=(4, 0))
         self._lt_pending = (buttons_row, overlay_row)
@@ -1773,7 +1769,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         legend = tk.Frame(search_row, bg=theme.BG)
         legend.pack(side="right")
         for txt, col in (("ADS-B", "#4aa3ff"), ("MLAT", "#e3b341"), ("TIS-B", "#f47067"), ("Mode S", "#8b96a5")):
-            tk.Label(legend, text=f" {txt} ", bg=theme.BG_CARD_ALT, fg=col, font=("Segoe UI", 8, "bold")).pack(side="left", padx=2)
+            tk.Label(legend, text=f" {txt} ", bg=theme.BG_CARD_ALT, fg=col, font=("Segoe UI", theme.fs(8), "bold")).pack(side="left", padx=2)
 
         table_outer = theme.card(wrapper)
         table_outer.pack(fill="x", padx=12, pady=(0, 6))
@@ -1814,7 +1810,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         id_col.pack(side="left", fill="both", expand=True)
         self.aircraft_detail_title = tk.Label(
             id_col, text="Cliquez un avion (carte ou tableau).", bg=theme.BG_CARD, fg=theme.TEXT,
-            font=("Segoe UI", 16, "bold"), anchor="w",
+            font=("Segoe UI", theme.fs(16), "bold"), anchor="w",
         )
         self.aircraft_detail_title.pack(anchor="w")
         flag_row = tk.Frame(id_col, bg=theme.BG_CARD)
@@ -1822,7 +1818,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.aircraft_detail_flag = tk.Label(flag_row, bg=theme.BG_CARD)
         self.aircraft_detail_flag.pack(side="left")
         self.aircraft_detail_hex = tk.Label(flag_row, text="", bg=theme.BG_CARD, fg=theme.MUTED,
-                                            font=("Consolas", 10), anchor="w")
+                                            font=("Consolas", theme.fs(10)), anchor="w")
         self.aircraft_detail_hex.pack(side="left", padx=(6, 0))
         self.aircraft_detail_airline = tk.Label(id_col, text="", bg=theme.BG_CARD, fg=theme.TEXT,
                                                 font=theme.FONT_BODY_BOLD, anchor="w", justify="left", wraplength=theme.px(720))
@@ -1856,15 +1852,15 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             grid.grid_columnconfigure(c, weight=1, uniform="ad")
             box = tk.Frame(grid, bg=theme.BG_CARD)
             box.grid(row=r, column=c, sticky="nsew", padx=3, pady=2)
-            tk.Label(box, text=title, bg="#1f4e5f", fg="#ffffff", font=("Segoe UI", 8, "bold"),
+            tk.Label(box, text=title, bg="#1f4e5f", fg="#ffffff", font=("Segoe UI", theme.fs(8), "bold"),
                      anchor="center").pack(fill="x")
             body = tk.Frame(box, bg=theme.BG_CARD)
             body.pack(fill="x", pady=(2, 0))
             body.grid_columnconfigure(1, weight=1)
             for i, (key, label) in enumerate(fields):
                 tk.Label(body, text=label + " :", bg=theme.BG_CARD, fg=theme.MUTED, pady=0,
-                         font=("Segoe UI", 8), anchor="w").grid(row=i, column=0, sticky="w")
-                v = tk.Label(body, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 8, "bold"),
+                         font=("Segoe UI", theme.fs(8)), anchor="w").grid(row=i, column=0, sticky="w")
+                v = tk.Label(body, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(8), "bold"),
                              anchor="e", pady=0)
                 v.grid(row=i, column=1, sticky="e")
                 self.aircraft_detail_value_labels[key] = v
@@ -1875,7 +1871,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         )
         self.aircraft_photo_label.pack(anchor="center", pady=(2, 0))
         self.aircraft_detail_credit = tk.Label(photo_box, text="", bg=theme.BG_CARD, fg=theme.MUTED,
-                                               font=("Segoe UI", 7), anchor="center")
+                                               font=("Segoe UI", theme.fs(7)), anchor="center")
         self.aircraft_detail_credit.pack(anchor="center")
 
         # --- Carte + légende d'altitude
@@ -1942,7 +1938,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         w = max(c.winfo_width(), 300)
         left, right = 90, 20
         span = w - left - right
-        c.create_text(4, 12, text="ALTITUDE (ft)", anchor="w", fill=theme.MUTED, font=("Segoe UI", 8, "bold"))
+        c.create_text(4, 12, text="ALTITUDE (ft)", anchor="w", fill=theme.MUTED, font=("Segoe UI", theme.fs(8), "bold"))
         marks = [0, 500, 1000, 2000, 4000, 6000, 8000, 10000, 20000, 30000, 40000]
 
         def x_of(alt):  # échelle non linéaire comme tar1090 (détail en basse altitude)
@@ -1958,7 +1954,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             x = x_of(m)
             c.create_line(x, 4, x, 21, fill=theme.BG)
             c.create_text(x, 29, text=(f"{m // 1000} 000" if m >= 1000 else str(m)) + ("+" if m == 40000 else ""),
-                          fill=theme.MUTED, font=("Segoe UI", 7))
+                          fill=theme.MUTED, font=("Segoe UI", theme.fs(7)))
 
     # -- Tri, sélection
 
@@ -2490,7 +2486,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             anchor="w", padx=12, pady=(4, 2))
         pk = theme.card(left)
         pk.pack(fill="both", expand=True, padx=12, pady=(0, 6))
-        self.aprs_packets = tk.Text(pk.inner, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", 8), relief="flat",
+        self.aprs_packets = tk.Text(pk.inner, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", theme.fs(8)), relief="flat",
                                     wrap="none", height=8, padx=6, pady=4)
         self.aprs_packets.tag_configure("lora", foreground="#60a5fa")
         self.aprs_packets.tag_configure("vhf", foreground="#4ade80")
@@ -2866,10 +2862,10 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             self.ais_filter_vars[label] = var
             cell = tk.Frame(grid, bg=theme.BG_CARD)
             cell.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 10), pady=1)
-            tk.Label(cell, text="●", bg=theme.BG_CARD, fg=colors[label], font=("Segoe UI", 11)).pack(side="left")
+            tk.Label(cell, text="●", bg=theme.BG_CARD, fg=colors[label], font=("Segoe UI", theme.fs(11))).pack(side="left")
             tk.Checkbutton(
                 cell, text=label, variable=var, bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
-                activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=("Segoe UI", 9),
+                activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=("Segoe UI", theme.fs(9)),
                 highlightthickness=0, bd=0,
             ).pack(side="left")
         self.ais_moving_only = tk.BooleanVar(value=False)
@@ -2877,7 +2873,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         tk.Checkbutton(
             filt, text="Navires en mouvement uniquement (> 0,5 kn)", variable=self.ais_moving_only,
             bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
-            activeforeground=theme.TEXT, font=("Segoe UI", 9), highlightthickness=0, bd=0,
+            activeforeground=theme.TEXT, font=("Segoe UI", theme.fs(9)), highlightthickness=0, bd=0,
         ).pack(anchor="w", pady=(4, 0))
 
         # --- Liste (triable par clic sur l'en-tête)
@@ -2923,7 +2919,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             r, c = divmod(i, 4)
             cell = tk.Frame(fields, bg=theme.BG_CARD)
             cell.grid(row=r, column=c, sticky="w", padx=(0, 14), pady=1)
-            tk.Label(cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+            tk.Label(cell, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8))).pack(anchor="w")
             v = tk.Label(cell, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY)
             v.pack(anchor="w")
             self.ais_detail_values[key] = v
@@ -3207,8 +3203,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             outer.grid(row=0, column=i, sticky="nsew", padx=6, pady=(0, 8))
             inner = outer.inner
             inner.configure(padding=14)
-            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-            value = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 18, "bold"))
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w")
+            value = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(18), "bold"))
             value.pack(anchor="w", pady=(4, 0))
             sub = tk.Label(inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
             sub.pack(anchor="w")
@@ -3449,7 +3445,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         win.resizable(False, False)
         head = tk.Frame(win, bg=theme.RED)
         head.pack(fill="x")
-        tk.Label(head, text=f"⚠  {title}", bg=theme.RED, fg="#0b0f17", font=("Segoe UI", 14, "bold"),
+        tk.Label(head, text=f"⚠  {title}", bg=theme.RED, fg="#0b0f17", font=("Segoe UI", theme.fs(14), "bold"),
                  padx=16, pady=10).pack(anchor="w")
         tk.Label(win, text=text, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY, justify="left",
                  wraplength=theme.px(460), padx=16, pady=14).pack(anchor="w")
@@ -3674,8 +3670,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             outer.grid(row=0, column=i, sticky="nsew", padx=6, pady=(0, 8))
             inner = outer.inner
             inner.configure(padding=14)
-            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-            v = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 18, "bold"))
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w")
+            v = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(18), "bold"))
             v.pack(anchor="w", pady=(4, 0))
             s = tk.Label(inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
             s.pack(anchor="w")
@@ -3876,7 +3872,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             tk.Label(win, text=hdr, bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY, justify="left",
                      anchor="w").pack(fill="x", padx=14, pady=(12, 8))
             txt = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, insertbackground=theme.TEXT, wrap="word",
-                          font=("Consolas", 10), relief="flat", padx=10, pady=10)
+                          font=("Consolas", theme.fs(10)), relief="flat", padx=10, pady=10)
             txt.insert("1.0", msg.get("Body") or "")
             txt.config(state="disabled")
             txt.pack(fill="both", expand=True, padx=14, pady=(0, 14))
@@ -3897,7 +3893,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                  font=theme.FONT_SECTION).pack(anchor="w")
         self.vigi_rows = tk.Frame(f, bg=theme.BG_CARD)
         self.vigi_rows.pack(anchor="w", fill="x", pady=(8, 0))
-        self.vigi_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+        self.vigi_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)),
                                     wraplength=theme.px(560), justify="left")
         self.vigi_status.pack(anchor="w", pady=(6, 0))
         key_row = tk.Frame(f, bg=theme.BG_CARD)
@@ -4453,7 +4449,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         d = det.inner
         d.configure(padding=10)
         self.b406_title = tk.Label(d, text="Sélectionnez une trame pour voir son décodage complet.", bg=theme.BG_CARD,
-                                   fg=theme.TEXT, font=("Segoe UI", 13, "bold"), anchor="w", justify="left",
+                                   fg=theme.TEXT, font=("Segoe UI", theme.fs(13), "bold"), anchor="w", justify="left",
                                    wraplength=theme.px(760))
         self.b406_title.pack(anchor="w")
         self.b406_where = tk.Label(d, text="", bg=theme.BG_CARD, fg=theme.ACCENT, font=theme.FONT_BODY_BOLD,
@@ -4468,7 +4464,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                        command=lambda: self._beacon_open_map("ign"), state="disabled")
         self.b406_geo_btn.pack(side="left", padx=6)
         ttk.Button(btns, text="Copier le décodage", style="Flat.TButton", command=self._beacon_copy).pack(side="left")
-        self.b406_text = tk.Text(d, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", 9), relief="flat",
+        self.b406_text = tk.Text(d, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Consolas", theme.fs(9)), relief="flat",
                                  wrap="word", height=12, padx=8, pady=6)
         self.b406_text.pack(fill="both", expand=True)
         self.b406_text.config(state="disabled")
@@ -4496,7 +4492,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             "Écoute seule. Une balise émet une salve d'environ 0,5 s toutes les 50 s. Trame RÉELLE (hors mode "
             "test) : une alerte de détresse est peut-être en cours — les secours sont normalement déjà alertés "
             "par satellite ; en cas de doute, prévenir le CROSS (196) ou le 112."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(900),
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(900),
         ).pack(anchor="w", pady=(6, 0))
 
         self._b406_frames = []
@@ -4791,10 +4787,10 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         d.configure(padding=12)
         d.configure(width=theme.px(380))
         self.s433_title = tk.Label(d, text="Sélectionnez un capteur.", bg=theme.BG_CARD, fg=theme.TEXT,
-                                   font=("Segoe UI", 13, "bold"), anchor="w", justify="left", wraplength=theme.px(360))
+                                   font=("Segoe UI", theme.fs(13), "bold"), anchor="w", justify="left", wraplength=theme.px(360))
         self.s433_title.pack(anchor="w")
         tk.Label(d, text="Double-clic sur une ligne pour donner un nom au capteur.", bg=theme.BG_CARD, fg=theme.MUTED,
-                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 8))
+                 font=("Segoe UI", theme.fs(8))).pack(anchor="w", pady=(2, 8))
         self.s433_vals = tk.Frame(d, bg=theme.BG_CARD)
         self.s433_vals.pack(anchor="w", fill="x")
         self._s433_devices = []
@@ -4952,8 +4948,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         t = top.inner
         t.configure(padding=12)
         tk.Label(t, text="PROCHAIN PASSAGE DE L'ISS", bg=theme.BG_CARD, fg=theme.MUTED,
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.sat_iss_big = tk.Label(t, text="—", bg=theme.BG_CARD, fg=theme.ACCENT, font=("Segoe UI", 18, "bold"))
+                 font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w")
+        self.sat_iss_big = tk.Label(t, text="—", bg=theme.BG_CARD, fg=theme.ACCENT, font=("Segoe UI", theme.fs(18), "bold"))
         self.sat_iss_big.pack(anchor="w")
         self.sat_iss_sub = tk.Label(t, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                                     justify="left", anchor="w")
@@ -4982,7 +4978,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         sb = ttk.Spinbox(bar, from_=0, to=60, width=4, textvariable=self.sat_minel_var, command=self._sat_recompute)
         sb.pack(side="left")
         sb.bind("<Return>", lambda _e: self._sat_recompute())
-        self.sat_tle_label = tk.Label(bar, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8))
+        self.sat_tle_label = tk.Label(bar, text="", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)))
         self.sat_tle_label.pack(side="right")
 
         tbl = theme.card(left)
@@ -5013,12 +5009,12 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         info = tk.Frame(d, bg=theme.BG_CARD)
         info.pack(side="left", fill="both", expand=True, padx=(10, 0))
         self.sat_det_title = tk.Label(info, text="Sélectionnez un passage.", bg=theme.BG_CARD, fg=theme.TEXT,
-                                      font=("Segoe UI", 13, "bold"), anchor="w")
+                                      font=("Segoe UI", theme.fs(13), "bold"), anchor="w")
         self.sat_det_title.pack(anchor="w")
         self.sat_det_freq = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.ACCENT, font=theme.FONT_SUBTITLE,
                                      anchor="w", justify="left", wraplength=theme.px(500))
         self.sat_det_freq.pack(anchor="w", pady=(2, 6))
-        self.sat_det_text = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.TEXT, font=("Consolas", 9),
+        self.sat_det_text = tk.Label(info, text="", bg=theme.BG_CARD, fg=theme.TEXT, font=("Consolas", theme.fs(9)),
                                      anchor="nw", justify="left")
         self.sat_det_text.pack(anchor="w", fill="both", expand=True)
 
@@ -5032,7 +5028,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.sat_map.set_zoom(3)
         tk.Label(right, text="Position actuelle des satellites suivis · trace des 90 prochaines minutes et zone de "
                              "visibilité du satellite sélectionné", bg=theme.BG, fg=theme.MUTED,
-                 font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
+                 font=("Segoe UI", theme.fs(8))).pack(anchor="w", pady=(4, 0))
 
         self._sats = []
         self._sat_passes = []
@@ -5140,12 +5136,12 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         for el in (0, 30, 60):
             rr = r * (90 - el) / 90
             c.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=theme.BORDER)
-            c.create_text(cx + 3, cy - rr + 7, text=f"{el}°", anchor="w", fill=theme.MUTED, font=("Segoe UI", 7))
+            c.create_text(cx + 3, cy - rr + 7, text=f"{el}°", anchor="w", fill=theme.MUTED, font=("Segoe UI", theme.fs(7)))
         for a, lab in ((0, "N"), (90, "E"), (180, "S"), (270, "O")):
             ra = math.radians(a)
             c.create_line(cx, cy, cx + r * math.sin(ra), cy - r * math.cos(ra), fill=theme.BORDER)
             c.create_text(cx + (r + 10) * math.sin(ra), cy - (r + 10) * math.cos(ra), text=lab, fill=theme.MUTED,
-                          font=("Segoe UI", 8, "bold"))
+                          font=("Segoe UI", theme.fs(8), "bold"))
         s, obs = p["sat"], self._sat_obs
         pts = []
         t = p["aos"]
@@ -5423,7 +5419,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         top = top_outer.inner
         top.configure(padding=16)
         tk.Label(top, text="La clé SDR est sur :", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE).pack(anchor="w")
-        self.sdr_mode_value = tk.Label(top, text="—", bg=theme.BG_CARD, fg=theme.ACCENT, font=("Segoe UI", 22, "bold"))
+        self.sdr_mode_value = tk.Label(top, text="—", bg=theme.BG_CARD, fg=theme.ACCENT, font=("Segoe UI", theme.fs(22), "bold"))
         self.sdr_mode_value.pack(anchor="w", pady=(2, 2))
         self.sdr_mode_detail = tk.Label(top, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY)
         self.sdr_mode_detail.pack(anchor="w", pady=(0, 10))
@@ -5687,8 +5683,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         power_outer.pack(fill="x", padx=12, pady=(8, 8))
         p = power_outer.inner
         p.configure(padding=16)
-        tk.Label(p, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.health_power_value = tk.Label(p, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 20, "bold"))
+        tk.Label(p, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w")
+        self.health_power_value = tk.Label(p, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(20), "bold"))
         self.health_power_value.pack(anchor="w", pady=(4, 2))
         self.health_power_detail = tk.Label(
             p, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY, justify="left", wraplength=theme.px(1200),
@@ -5709,8 +5705,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             outer.grid(row=r, column=c, sticky="nsew", padx=6, pady=(0, 8))
             inner = outer.inner
             inner.configure(padding=14)
-            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-            v = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 18, "bold"))
+            tk.Label(inner, text=title, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w")
+            v = tk.Label(inner, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(18), "bold"))
             v.pack(anchor="w", pady=(4, 0))
             s = tk.Label(inner, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
             s.pack(anchor="w")
@@ -5925,7 +5921,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             bar.pack(fill="x", padx=10, pady=(10, 0))
             tk.Label(bar, text=f"{label} — 120 dernières lignes ({time.strftime('%H:%M:%S')})", bg=theme.BG,
                      fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
-            txt = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, wrap="none", font=("Consolas", 9),
+            txt = tk.Text(win, bg=theme.BG_CARD_ALT, fg=theme.TEXT, wrap="none", font=("Consolas", theme.fs(9)),
                           relief="flat", padx=8, pady=8)
             ysb = ttk.Scrollbar(win, orient="vertical", command=txt.yview)
             txt.configure(yscrollcommand=ysb.set)

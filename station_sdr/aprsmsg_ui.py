@@ -95,12 +95,12 @@ class AprsMsgMixin:
         self._am_title = tk.Label(right, text="Choisissez ou commencez une conversation", bg=theme.BG,
                                   fg=theme.TEXT, font=theme.FONT_SECTION)
         self._am_title.pack(anchor="w", pady=(0, 4))
-        self._am_text = tk.Text(right, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", 10), relief="flat",
+        self._am_text = tk.Text(right, bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", theme.fs(10)), relief="flat",
                                 wrap="word", padx=8, pady=6, state="disabled")
         self._am_text.tag_configure("in", foreground="#e5e7eb")
         self._am_text.tag_configure("out", foreground="#93c5fd", justify="right")
-        self._am_text.tag_configure("meta", foreground=theme.MUTED, font=("Segoe UI", 8))
-        self._am_text.tag_configure("meta_out", foreground=theme.MUTED, font=("Segoe UI", 8), justify="right")
+        self._am_text.tag_configure("meta", foreground=theme.MUTED, font=("Segoe UI", theme.fs(8)))
+        self._am_text.tag_configure("meta_out", foreground=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="right")
         self._am_text.pack(fill="both", expand=True)
         sr = tk.Frame(right, bg=theme.BG)
         sr.pack(fill="x", pady=(6, 0))
@@ -112,7 +112,7 @@ class AprsMsgMixin:
         self._am_count = tk.Label(sr, text="0/67", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self._am_count.pack(side="left", padx=6)
         ttk.Button(sr, text="Envoyer", style="Accent.TButton", command=self._am_send).pack(side="left")
-        tk.Label(win, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(940),
+        tk.Label(win, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(940),
                  text=("Les messages passent par Internet (réseau APRS-IS) : aucune émission radio. Ils atteignent "
                        "aussi les stations radio via les iGates qui relaient vers la VHF. 67 caractères au plus, "
                        "sans accents. Un message non acquitté est réémis 4 fois (30 s, 1, 2 puis 4 min).")).pack(

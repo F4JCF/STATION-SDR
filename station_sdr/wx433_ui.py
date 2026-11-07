@@ -82,7 +82,7 @@ class Wx433Mixin:
         ttk.Button(r2, text="aprs.fi", style="Flat.TButton",
                    command=lambda: webbrowser.open(f"https://aprs.fi/#!call={getattr(self, '_wx4_call', 'F4JCF-13')}")
                    ).pack(side="left")
-        self.wx4_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+        self.wx4_status = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)),
                                    wraplength=theme.px(1100), justify="left")
         self.wx4_status.pack(anchor="w", pady=(6, 0))
         self._wx4_devices = []

@@ -144,11 +144,11 @@ class NoiseMixin:
         for i in range(6):
             v = lo + (hi - lo) * i / 5
             cv.create_line(x0, sy(v), x1, sy(v), fill=theme.BG_CARD_ALT)
-            cv.create_text(x0 - 6, sy(v), anchor="e", text=f"{v:.0f}", fill=theme.MUTED, font=("Segoe UI", 8))
+            cv.create_text(x0 - 6, sy(v), anchor="e", text=f"{v:.0f}", fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
         for i in range(6):
             t = t0 + (t1 - t0) * i / 5
             cv.create_text(sx(t), y1 + 12, text=time.strftime("%d/%m", time.localtime(t)), fill=theme.MUTED,
-                           font=("Segoe UI", 8))
+                           font=("Segoe UI", theme.fs(8)))
         for bi, band in enumerate(bands):
             color = NOISE_COLORS[bi % len(NOISE_COLORS)]
             pts = [(sx(x["time"]), sy(x["bands"][band]["median"])) for x in hist if band in x["bands"]]
@@ -159,7 +159,7 @@ class NoiseMixin:
             lx = x0 + (bi % 4) * 190
             ly = h - 34 + (bi // 4) * 16
             cv.create_rectangle(lx, ly - 4, lx + 14, ly + 4, fill=color, outline=color)
-            cv.create_text(lx + 20, ly, anchor="w", text=band, fill=theme.TEXT, font=("Segoe UI", 9))
+            cv.create_text(lx + 20, ly, anchor="w", text=band, fill=theme.TEXT, font=("Segoe UI", theme.fs(9)))
 
     def _noise_run_now(self):
         base = self._mt_base()

@@ -71,7 +71,7 @@ class MeteorMixin:
         tk.Label(h, text=("Pendant un passage retenu (environ 10 min), la clé SDR passe sur le satellite puis revient "
                           "seule au module précédent. La veille 121,5 MHz n'est jamais interrompue. L'ISS n'émet en "
                           "SSTV que pendant les événements ARISS annoncés : indiquez la date de fin de l'événement."),
-                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(6, 0))
+                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8))).pack(anchor="w", pady=(6, 0))
 
         body = tk.Frame(outer, bg=theme.BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
@@ -250,7 +250,7 @@ class MeteorMixin:
                        f"{im['sat'].replace('Meteor-M ', '')} · {im['max_el']:.0f}° · "
                        + (f"{im['useful_pct']} % reçu" if im.get("useful_pct") is not None else f"{im['lines']} l."))
             t = tk.Label(cell, text=txt,
-                         bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", 8), justify="center")
+                         bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", theme.fs(8)), justify="center")
             t.pack(pady=(2, 4))
             t.bind("<Button-1>", lambda _e, n=im["name"]: self._mt_open(n))
 

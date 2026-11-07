@@ -97,7 +97,7 @@ class WefaxMixin:
         self.wf_btn.pack(side="left", padx=(10, 0))
         ttk.Button(r2, text="Terminer la carte", style="Flat.TButton",
                    command=lambda: self._wf_dec and self._wf_dec.flush()).pack(side="left", padx=6)
-        tk.Label(h, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(1500),
+        tk.Label(h, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(1500),
                  text=("La radio se règle en USB (DATA-U) 1,9 kHz sous la fréquence publiée. Fermez VarAC, WSJT-X ou "
                        "Winlink avant « Régler la radio » (le port CAT ne peut servir qu'à un logiciel à la fois). "
                        "Chaque carte commence par une tonalité et un phasage de 30 s ; une carte prise en cours est "
@@ -153,10 +153,10 @@ class WefaxMixin:
         rb = tk.Frame(f, bg=theme.BG_CARD)
         rb.pack(fill="x", pady=(4, 0))
         ttk.Button(rb, text="Appliquer", style="Flat.TButton", command=self._wfp_apply).pack(side="left")
-        self.wfp_info = tk.Label(rb, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8),
+        self.wfp_info = tk.Label(rb, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)),
                                  wraplength=theme.px(380), justify="left")
         self.wfp_info.pack(side="left", padx=8)
-        tk.Label(f, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(520),
+        tk.Label(f, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(520),
                  text=("La clé SDR ne descend pas sous 25 MHz : il faut un convertisseur HF (Ham It Up : 125 MHz) et "
                        "un fil HF, avec un commutateur pour garder la discone sur les autres modules.")).pack(
             anchor="w", pady=(4, 0))
@@ -424,7 +424,7 @@ class WefaxMixin:
             self._wf_thumbs.append(ph)
             l1 = tk.Label(cell, image=ph, bg=theme.BG_CARD)
             l1.pack()
-            l2 = tk.Label(cell, text=label, bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", 8))
+            l2 = tk.Label(cell, text=label, bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(8)))
             l2.pack()
             cmd = (lambda e, p=it: self._wf_open_local(p)) if src == "pc" else (lambda e, n=it["name"]: self._mt_open(n))
             for w in (cell, l1, l2):

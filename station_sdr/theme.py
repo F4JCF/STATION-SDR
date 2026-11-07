@@ -23,8 +23,34 @@ SCALE = 1.0
 
 
 def set_scale(s: float) -> None:
-    global SCALE
+    """Fixe l'échelle et recalcule les polices (en points) de l'appli."""
+    global SCALE, FONT_TITLE, FONT_SUBTITLE, FONT_SECTION, FONT_BODY, FONT_BODY_BOLD, FONT_MONO, FONT_CHIP
     SCALE = max(0.6, min(2.0, float(s)))
+    FONT_TITLE = ("Segoe UI", fs(18), "bold")
+    FONT_SUBTITLE = ("Segoe UI", fs(10))
+    FONT_SECTION = ("Segoe UI", fs(12), "bold")
+    FONT_BODY = ("Segoe UI", fs(10))
+    FONT_BODY_BOLD = ("Segoe UI", fs(10), "bold")
+    FONT_MONO = ("Consolas", fs(9))
+    FONT_CHIP = ("Segoe UI", fs(9), "bold")
+
+
+def fs(points) -> int:
+    """Taille de police mise à l'échelle (en points)."""
+    return max(6, int(round(points * SCALE)))
+
+
+def scale_named_fonts(root) -> None:
+    """Polices par défaut de Tk (boutons, tableaux, menus…) à l'échelle."""
+    from tkinter import font as tkfont
+    for name in ("TkDefaultFont", "TkTextFont", "TkHeadingFont", "TkMenuFont", "TkFixedFont",
+                 "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+        try:
+            f = tkfont.nametofont(name, root=root)
+            size = int(f.cget("size"))
+            f.configure(size=int(round(size * SCALE)) or size)
+        except Exception:
+            pass
 
 
 def px(v) -> int:

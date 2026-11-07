@@ -113,7 +113,7 @@ class SpotsMixin:
         self.sp_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self.sp_tree.pack(fill="both", expand=True, padx=1, pady=1)
-        tk.Label(left, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(750),
+        tk.Label(left, bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(750),
                  text=("Données PSKReporter.info : les stations qui décodent un signal (VarAC, FT8, WSPR, JS8…) le "
                        "signalent sur Internet. Séparez plusieurs indicatifs par des virgules. Actualisation "
                        "automatique toutes les 5 minutes quand la page est ouverte.")).pack(anchor="w", pady=(4, 0))
@@ -204,7 +204,7 @@ class SpotsMixin:
         for who, (p, s, _d) in list(best.items())[:150]:
             self._sp_objs.append(self.sp_map.set_marker(p[0], p[1], text=who, text_color="#1d4ed8",
                                                         marker_color_circle="#1d4ed8",
-                                                        marker_color_outside="#60a5fa", font=("Segoe UI", 8)))
+                                                        marker_color_outside="#60a5fa", font=("Segoe UI", theme.fs(8))))
         self._sp_objs.append(self.sp_map.set_marker(home[0], home[1], text="F4JCF", text_color="#16a34a",
                                                     marker_color_circle="#14532d", marker_color_outside="#22c55e"))
         if rows:

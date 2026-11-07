@@ -157,7 +157,7 @@ class SaterMixin:
         big = theme.card(left)
         big.pack(fill="x", padx=12, pady=(0, 6))
         self.elt_state = tk.Label(big.inner, text="—", bg=theme.BG_CARD_ALT, fg=theme.TEXT,
-                                  font=("Segoe UI", 16, "bold"), pady=6)
+                                  font=("Segoe UI", theme.fs(16), "bold"), pady=6)
         self.elt_state.pack(fill="x")
         self.elt_meter = tk.Canvas(big.inner, height=58, bg=theme.BG_CARD, highlightthickness=0)
         self.elt_meter.pack(fill="x", padx=8, pady=6)
@@ -221,7 +221,7 @@ class SaterMixin:
             "Un aéronef en difficulté peut aussi parler sur 121,5 (fréquence de détresse aviation) : écouter "
             "les enregistrements. En cas de détection réelle hors exercice : prévenir l'ARCC Lyon "
             "(via le 112 / 196 en mer)."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left", wraplength=theme.px(900),
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(9)), justify="left", wraplength=theme.px(900),
         ).pack(anchor="w", pady=(8, 0))
 
         self._elt_status = None
@@ -375,10 +375,10 @@ class SaterMixin:
         for db in (0, 10, 20, 30, 40):
             x = x0 + (x1 - x0) * db / 40
             c.create_line(x, y1, x, y1 + 4, fill=theme.MUTED)
-            c.create_text(x, y1 + 11, text=f"+{db}", fill=theme.MUTED, font=("Segoe UI", 7))
-        c.create_text(x1 + 12, 20, anchor="w", fill=theme.TEXT, font=("Segoe UI", 16, "bold"),
+            c.create_text(x, y1 + 11, text=f"+{db}", fill=theme.MUTED, font=("Segoe UI", theme.fs(7)))
+        c.create_text(x1 + 12, 20, anchor="w", fill=theme.TEXT, font=("Segoe UI", theme.fs(16), "bold"),
                       text=f"+{above:.1f} dB".replace(".", ",") if above is not None else "— dB")
-        c.create_text(x1 + 12, 42, anchor="w", fill=theme.MUTED, font=("Segoe UI", 8),
+        c.create_text(x1 + 12, 42, anchor="w", fill=theme.MUTED, font=("Segoe UI", theme.fs(8)),
                       text=(f"au-dessus du bruit · bruit {floor:.1f} · brut {lvl:.1f}".replace(".", ",")
                             if lvl is not None and floor is not None else "au-dessus du bruit de fond"))
 
@@ -409,13 +409,13 @@ class SaterMixin:
         for f in (500, 1000, 1500, 2000, 2500):
             y = (h - 16) * (1 - (f - f_lo) / (f_hi - f_lo))
             c.create_line(lm - 4, y, lm, y, fill=theme.MUTED)
-            c.create_text(lm - 6, y, text=f"{f}", anchor="e", fill=theme.MUTED, font=("Segoe UI", 7))
-        c.create_text(4, 4, text="Hz", anchor="nw", fill=theme.MUTED, font=("Segoe UI", 7))
+            c.create_text(lm - 6, y, text=f"{f}", anchor="e", fill=theme.MUTED, font=("Segoe UI", theme.fs(7)))
+        c.create_text(4, 4, text="Hz", anchor="nw", fill=theme.MUTED, font=("Segoe UI", theme.fs(7)))
         span = len(rows) * wf.get("dt", 0.043)
         for s in range(0, int(span) + 1):
             x = lm + (w - lm) * (1 - s / span) if span else w
             c.create_text(min(x, w - 14), h - 8, text="maintenant" if s == 0 else f"−{s} s",
-                          fill=theme.MUTED, font=("Segoe UI", 7), anchor="e" if s == 0 else "center")
+                          fill=theme.MUTED, font=("Segoe UI", theme.fs(7)), anchor="e" if s == 0 else "center")
 
     def _elt_draw_chart(self):
         c = getattr(self, "elt_chart", None)
@@ -453,18 +453,18 @@ class SaterMixin:
         v = int(vmin // step + 1) * step
         while v < vmax:
             c.create_line(ml, Y(v), w - mr, Y(v), fill=theme.BORDER)
-            c.create_text(ml - 6, Y(v), text=f"{v}", anchor="e", fill=theme.MUTED, font=("Segoe UI", 8))
+            c.create_text(ml - 6, Y(v), text=f"{v}", anchor="e", fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
             v += step
-        c.create_text(6, mt, text="dB", anchor="nw", fill=theme.MUTED, font=("Segoe UI", 8))
+        c.create_text(6, mt, text="dB", anchor="nw", fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
         for m in (15, 10, 5, 0):
             x = X(now - m * 60)
             c.create_line(x, h - mb, x, h - mb + 4, fill=theme.MUTED)
             c.create_text(x, h - mb + 13, text="maintenant" if m == 0 else f"−{m} min", fill=theme.MUTED,
-                          font=("Segoe UI", 8), anchor="e" if m == 0 else "center")
+                          font=("Segoe UI", theme.fs(8)), anchor="e" if m == 0 else "center")
         if floor is not None:
             c.create_line(ml, Y(floor), w - mr, Y(floor), fill=theme.MUTED, dash=(4, 3))
             c.create_text(w - mr - 4, Y(floor) - 8, text="bruit de fond", anchor="e", fill=theme.MUTED,
-                          font=("Segoe UI", 8))
+                          font=("Segoe UI", theme.fs(8)))
         line = []
         for t, v in pts:
             if t >= t0:
@@ -630,7 +630,7 @@ class SaterMixin:
         ttk.Button(r2, text="Ajouter le relèvement", style="Accent.TButton", command=self._gonio_add).pack(side="right")
         tk.Label(f, text=("Position : « 43.6512, 6.9876 », « 43°39,07' N 6°59,26' E » ou locator JN33LP ; ou clic "
                           "sur la carte. Touche Entrée dans l'azimut = ajouter."),
-                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                 bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8))).pack(anchor="w")
 
         tk.Label(left, text="Relèvements (double-clic : reprendre dans le formulaire)", bg=theme.BG, fg=theme.TEXT,
                  font=theme.FONT_SECTION).pack(anchor="w", padx=12, pady=(2, 4))
@@ -662,7 +662,7 @@ class SaterMixin:
         r.configure(padding=12)
         tk.Label(r, text="Zone probable", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(anchor="w")
         self.g_result = tk.Label(r, text="Ajoutez au moins deux relèvements.", bg=theme.BG_CARD, fg=theme.MUTED,
-                                 font=("Segoe UI", 13, "bold"), justify="left", anchor="w", wraplength=theme.px(760))
+                                 font=("Segoe UI", theme.fs(13), "bold"), justify="left", anchor="w", wraplength=theme.px(760))
         self.g_result.pack(anchor="w", pady=(4, 0))
         self.g_detail = tk.Label(r, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY,
                                  justify="left", anchor="w", wraplength=theme.px(760))
@@ -695,7 +695,7 @@ class SaterMixin:
             "quand on approche). Des relèvements pris de points bien écartés (angles de croisement > 30°) "
             "donnent une zone plus petite. Les reliefs provoquent des réflexions : se méfier d'un relèvement "
             "isolé qui ne croise pas les autres."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), justify="left", wraplength=theme.px(1000),
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left", wraplength=theme.px(1000),
         ).pack(anchor="w", pady=(6, 0))
         self.g_map.add_right_click_menu_command("Prendre cette position pour le relèvement",
                                                 lambda ll: self._gonio_set_pos(ll), pass_coords=True)

@@ -100,7 +100,7 @@ class MissionMixin:
                    command=lambda: self._mission_report(final=False)).pack(side="left")
         ttk.Button(b, text="Envoyer…", style="Flat.TButton",
                    command=self._mission_send_dialog).pack(side="left", padx=(8, 0))
-        self.ms_state = tk.Label(left, text="", bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", 14, "bold"),
+        self.ms_state = tk.Label(left, text="", bg=theme.BG_CARD_ALT, fg=theme.TEXT, font=("Segoe UI", theme.fs(14), "bold"),
                                  pady=8, wraplength=theme.px(660), justify="center")
         self.ms_state.pack(fill="x", padx=12, pady=(0, 6))
         q = tk.Frame(left, bg=theme.BG)
@@ -117,7 +117,7 @@ class MissionMixin:
             "en goniométrie, alertes, bascules de la clé. Ajoutez vos propres notes (contacts radio, consignes, "
             "positions des équipes). Le compte rendu s'ouvre dans le navigateur (« Imprimer » → "
             "« Enregistrer en PDF ») ; « Envoyer… » l'expédie par e-mail et/ou sur votre téléphone."),
-            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left", wraplength=theme.px(670)).pack(
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(9)), justify="left", wraplength=theme.px(670)).pack(
             anchor="w", padx=12, pady=(10, 0))
 
         right = tk.Frame(outer, bg=theme.BG)
@@ -435,12 +435,12 @@ Coordonnées WGS84. Les azimuts lus au compas sont corrigés de la déclinaison 
             row=3, column=0, sticky="e", padx=(24, 0))
         ttk.Entry(f, textvariable=v_extra, width=52).grid(row=3, column=1, columnspan=2, sticky="w", padx=8)
         tk.Label(f, text="(adresses séparées par des virgules, ex. le PC ADRASEC)", bg=theme.BG, fg=theme.MUTED,
-                 font=("Segoe UI", 8)).grid(row=4, column=1, columnspan=2, sticky="w", padx=8)
+                 font=("Segoe UI", theme.fs(8))).grid(row=4, column=1, columnspan=2, sticky="w", padx=8)
         tk.Checkbutton(f, text="Sur le téléphone (ntfy : résumé + fichier à ouvrir)", variable=v_ntfy, **cb).grid(
             row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
         tk.Label(f, text=("Le fichier passe par le serveur ntfy.sh (gardé quelques heures, accessible à qui connaît "
                           "votre sujet ntfy). Décochez pour une mission sensible : seul le résumé partira."),
-                 bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 8), wraplength=theme.px(520), justify="left").grid(
+                 bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), wraplength=theme.px(520), justify="left").grid(
             row=6, column=0, columnspan=3, sticky="w", padx=(24, 0))
         v_file = tk.BooleanVar(value=True)
         tk.Checkbutton(f, text="joindre le fichier", variable=v_file, **cb).grid(
