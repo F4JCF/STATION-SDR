@@ -160,8 +160,59 @@ def receive_noise(job):
     finish({"result": f"bruit mesuré sur {len(entry['bands'])} bande(s)"})
 
 
+def receive_wefax(job):
+    """WEFAX par la clé + convertisseur HF : BLU haute 1,9 kHz sous la fréquence publiée."""
+    if not shutil.which("rtl_fm"):
+        finish({"result": "rtl_fm absent"})
+        return
+    raw = "/run/meteor/wefax.raw"
+    rate = 12000
+    hz = int(job["khz"] * 1000 - 1900 + job.get("offset_mhz", 0) * 1e6)
+    with open(raw, "wb") as out:
+        p = subprocess.Popen(["rtl_fm", "-M", "usb", "-f", str(hz), "-s", str(rate), "-g", str(job["gain"]), "-"],
+                             stdout=out, stderr=subprocess.DEVNULL)
+        log.info("WEFAX %.1f kHz jusqu'à %s", job["khz"], time.strftime("%H:%M", time.localtime(job["los"])))
+        while time.time() < job["los"] and p.poll() is None:
+            time.sleep(2)
+        if p.poll() is None:
+            p.send_signal(signal.SIGINT)
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    try:
+        import sys
+        import numpy as np
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import wefax_decode
+        x = np.fromfile(raw, dtype="<i2").astype(np.float32)
+        results = wefax_decode.decode_file(x, rate)
+    except ImportError as exc:
+        finish({"result": f"décodeur WEFAX absent ({exc}) : mettre à jour le Pi"})
+        return
+    finally:
+        try:
+            os.remove(raw)
+        except OSError:
+            pass
+    os.makedirs(job["out_dir"], exist_ok=True)
+    names = []
+    for i, (img, info) in enumerate(results, 1):
+        name = job["name"] + (f"-{i}" if len(results) > 1 else "")
+        png = os.path.join(job["out_dir"], name + ".png")
+        wefax_decode.save_png(img, png)
+        post_process({**job, "name": name}, png, {"khz": job["khz"], "complete": bool(info.get("header")),
+                                                    "ppm": info.get("ppm")})
+        names.append(name)
+    finish({"result": f"{len(names)} carte(s) WEFAX" if names else "aucune carte WEFAX (pas de signal)",
+            **({"name": names[0]} if names else {})})
+
+
 def receive(job):
     kind = job.get("kind", "lrpt")
+    if kind == "wefax":
+        receive_wefax(job)
+        return
     if kind == "sstv":
         receive_sstv(job)
         return

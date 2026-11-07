@@ -220,7 +220,7 @@ class MeteorMixin:
             w.destroy()
         flt = self.mt_filter.get() if hasattr(self, "mt_filter") else "all"
         shown = [im for im in self._mt_images
-                 if flt == "all" or (im.get("kind") == "sstv") == (flt == "sstv")][:12]
+                 if im.get("kind") != "wefax" and (flt == "all" or (im.get("kind") == "sstv") == (flt == "sstv"))][:12]
         if not shown:
             tk.Label(g, text="Pas encore d'image : elles arrivent après le premier passage retenu.",
                      bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY).pack(anchor="w")

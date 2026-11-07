@@ -375,3 +375,15 @@ alertes, passages de satellites ; un appui change d'écran. Remplace
 Page Météo, case « ⚡ Foudre » : impacts en temps réel (Blitzortung.org, usage
 privé) sur la carte, distance du plus proche, alerte quand un impact tombe à
 moins de N km (25 par défaut).
+
+## WEFAX (cartes météo HF)
+
+Vignette « WEFAX ». Sur le PC : le son du FT-991A (carte son USB) est décodé
+en direct (`station_sdr/wefax.py` : porteuse 1900 Hz, noir 1500 / blanc 2300 Hz,
+IOC 576, 120 lignes/min, tonalités de départ 300 Hz et d'arrêt 450 Hz, phasage
+pour caler les lignes et corriger la dérive de la carte son) ; « Régler la
+radio » envoie la fréquence (USB 1,9 kHz sous la fréquence publiée) par CAT.
+Cartes dans Documents/STATION-SDR/Wefax, redressables à la main. Sur le Pi
+(convertisseur HF requis) : créneaux quotidiens dans meteor_api (tâche
+« wefax », rtl_fm USB avec le décalage du convertisseur), décodage au
+coucher du créneau par /usr/local/bin/wefax_decode.py.

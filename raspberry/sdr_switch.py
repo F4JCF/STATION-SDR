@@ -507,6 +507,7 @@ PI_FILES = [
     ("raspberry/meteor_api.py", "/usr/local/bin/meteor_api.py", 0o755),
     ("raspberry/meteor_rx.py", "/usr/local/bin/meteor_rx.py", 0o755),
     ("raspberry/sstv_decode.py", "/usr/local/bin/sstv_decode.py", 0o755),
+    ("station_sdr/wefax.py", "/usr/local/bin/wefax_decode.py", 0o755),
     ("raspberry/listen_api.py", "/usr/local/bin/listen_api.py", 0o755),
     ("raspberry/nextion_station.py", "/usr/local/bin/nextion_station.py", 0o755),
     ("raspberry/listen.service", "/etc/systemd/system/listen.service", 0o644),
@@ -515,6 +516,7 @@ PI_FILES = [
 ]
 # Fichiers apparus après coup dans un module : installés si le module l'est
 PI_COMPANIONS = {"/usr/local/bin/sstv_decode.py": "/usr/local/bin/meteor_rx.py",
+                 "/usr/local/bin/wefax_decode.py": "/usr/local/bin/meteor_rx.py",
                  # écoute à distance : seulement rtl_fm, déjà là avec les modules de base
                  "/usr/local/bin/listen_api.py": "/usr/local/bin/elt121_api.py",
                  "/etc/systemd/system/listen.service": "/usr/local/bin/elt121_api.py"}

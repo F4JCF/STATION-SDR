@@ -52,6 +52,7 @@ from .aprsmsg_ui import AprsMsgMixin
 from .profiles_ui import ProfilesMixin
 from .spots_ui import SpotsMixin
 from .lightning_ui import LightningMixin
+from .wefax_ui import WefaxMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -112,6 +113,7 @@ HOME_TILES = [
     ("meteor", "Images satellites", "Meteor-M · SSTV de l'ISS"),
     ("mission", "Mission / Exercice", "Veille, goniométrie, compte rendu"),
     ("spots", "Spots HF", "PSKReporter · qui m'entend"),
+    ("wefax", "WEFAX", "Cartes météo HF (DWD, Northwood)"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Clé SDR", "Pilotage et partage automatique"),
@@ -407,6 +409,12 @@ def _tile_icon(key: str, size: int = 30, color: str = None):
         d.arc([*pt(0.10, 0.40), *pt(0.80, 0.70)], start=0, end=180, fill=color, width=max(1, lw - 1))
         d.rectangle([*pt(0.70, 0.04), *pt(0.92, 0.18)], outline=color, width=lw)
         d.line([pt(0.70, 0.18), pt(0.52, 0.42)], fill=color, width=max(1, lw - 1))
+    elif key == "wefax":
+        # feuille de carte qui sort d'un rouleau, isobares
+        d.rectangle([*pt(0.14, 0.10), *pt(0.86, 0.28)], outline=color, width=lw)
+        d.rectangle([*pt(0.22, 0.28), *pt(0.78, 0.92)], outline=color, width=lw)
+        d.arc([*pt(0.30, 0.42), *pt(0.70, 0.82)], start=200, end=340, fill=color, width=max(1, lw - 1))
+        d.arc([*pt(0.38, 0.54), *pt(0.62, 0.78)], start=200, end=340, fill=color, width=max(1, lw - 1))
     elif key == "spots":
         # globe et ondes
         d.ellipse([*pt(0.06, 0.30), *pt(0.66, 0.90)], outline=color, width=lw)
@@ -719,7 +727,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, NoiseMixin, Wx433Mixin, AprsMsgMixin, ProfilesMixin, SpotsMixin, LightningMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, NoiseMixin, Wx433Mixin, AprsMsgMixin, ProfilesMixin, SpotsMixin, LightningMixin, WefaxMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -1110,6 +1118,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self._build_mission_tab(self.pages["mission"])
         self._build_meteor_tab(self.pages["meteor"])
         self._build_spots_tab(self.pages["spots"])
+        self._build_wefax_tab(self.pages["wefax"])
         self._build_sat_tab(self.pages["sats"])
         self._build_svxlink_tab(self.pages["svxlink"])
         self._build_sdr_tab(self.pages["sdr"])
@@ -1398,6 +1407,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             self._mt_start_poll()
         if key == "spots":
             self._sp_start_poll()
+        if key == "wefax":
+            self._wf_start_poll()
         if key == "s433" and not getattr(self, "_s433_poll_running", False):
             self._s433_poll_running = True
             self._s433_poll()

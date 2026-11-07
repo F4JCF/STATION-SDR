@@ -27,7 +27,8 @@ echo "== Services"
 curl -fsSL -o /usr/local/bin/meteor_api.py "$BASE/meteor_api.py"
 curl -fsSL -o /usr/local/bin/meteor_rx.py "$BASE/meteor_rx.py"
 curl -fsSL -o /usr/local/bin/sstv_decode.py "$BASE/sstv_decode.py"
-chmod 755 /usr/local/bin/meteor_api.py /usr/local/bin/meteor_rx.py /usr/local/bin/sstv_decode.py
+curl -fsSL -o /usr/local/bin/wefax_decode.py "${BASE%/raspberry}/station_sdr/wefax.py"
+chmod 755 /usr/local/bin/meteor_api.py /usr/local/bin/meteor_rx.py /usr/local/bin/sstv_decode.py /usr/local/bin/wefax_decode.py
 curl -fsSL -o /etc/systemd/system/meteor-api.service "$BASE/meteor-api.service"
 curl -fsSL -o /etc/systemd/system/meteor-rx.service "$BASE/meteor-rx.service"
 curl -fsSL -o /usr/local/bin/sdr_switch.py "$BASE/sdr_switch.py"

@@ -57,7 +57,9 @@ log = logging.getLogger("meteor")
 conf = {"enabled": True, "min_el": 25, "gain": 40, "freq_mhz": 137.9, "symrate": 72000, "mode": "oqpsk",
         "diff": True, "lat": 43.590541, "lon": 7.002072, "alt_m": 200,
         "sstv_enabled": False, "sstv_until": "", "sstv_min_el": 15, "sstv_freq_mhz": 145.8,
-        "noise_enabled": True, "noise_time": "03:30", "noise_gain": 30}
+        "noise_enabled": True, "noise_time": "03:30", "noise_gain": 30,
+        # WEFAX (cartes météo HF) : clé + convertisseur HF (Ham It Up…), créneaux quotidiens
+        "wefax_enabled": False, "wefax_offset_mhz": 125.0, "wefax_gain": 40, "wefax_slots": []}
 state = {"passes": [], "current": None, "last": None, "error": None, "tle_time": None,
          "noise_request": False, "last_noise_day": None}
 
@@ -311,6 +313,30 @@ def run_noise():
     state["last_noise_day"] = time.strftime("%Y-%m-%d")
 
 
+def wefax_slot_due():
+    """Créneau WEFAX qui commence maintenant (à la minute près), pas encore fait aujourd'hui."""
+    if not conf.get("wefax_enabled"):
+        return None
+    hm = time.strftime("%H:%M")
+    day = time.strftime("%Y-%m-%d")
+    done = state.setdefault("wefax_done", {})
+    for slot in conf.get("wefax_slots") or []:
+        key = f"{slot.get('time')}-{slot.get('khz')}"
+        if slot.get("time") == hm and done.get(key) != day:
+            done[key] = day
+            return slot
+    return None
+
+
+def run_wefax(slot):
+    stamp = time.strftime("%Y%m%d-%H%M")
+    dur = max(2, min(60, int(slot.get("dur") or 15)))
+    job = {"kind": "wefax", "name": f"{stamp}_WEFAX", "sat": f"WEFAX {slot.get('khz')} kHz", "los": time.time() + dur * 60,
+           "khz": float(slot["khz"]), "offset_mhz": float(conf.get("wefax_offset_mhz") or 0),
+           "gain": conf.get("wefax_gain", 40), "out_dir": IMG_DIR, "max_el": 0, "aos": time.time()}
+    run_job(job, {"sat": job["sat"], "kind": "wefax", "aos": time.time()})
+
+
 def noise_due(now):
     if state["noise_request"]:
         return True
@@ -331,8 +357,9 @@ def prune():
     except OSError:
         return
     sstv = [f for f in pngs if "_ISS" in f]
-    lrpt = [f for f in pngs if "_ISS" not in f]
-    for old in lrpt[:-KEEP] + sstv[:-KEEP]:
+    wefax = [f for f in pngs if "_WEFAX" in f]
+    lrpt = [f for f in pngs if "_ISS" not in f and "_WEFAX" not in f]
+    for old in lrpt[:-KEEP] + sstv[:-KEEP] + wefax[:-KEEP]:
         for ext in (".png", ".jpg", ".json"):
             try:
                 os.remove(os.path.join(IMG_DIR, old[:-4] + ext))
@@ -369,6 +396,10 @@ def scheduler():
                     last_calc = 0
                     break
             else:
+                slot = wefax_slot_due()
+                if slot:
+                    run_wefax(slot)
+                    continue
                 # Relevé du bruit : seulement si aucun passage voulu dans les 15 min
                 if noise_due(now) and not any(wanted(p) and p["aos"] - now < 900 and p["los"] > now
                                               for p in state["passes"]):
@@ -442,7 +473,22 @@ class Handler(BaseHTTPRequestHandler):
                     conf["min_el"] = max(5, min(80, float(body["min_el"])))
                 if "gain" in body:
                     conf["gain"] = max(0.0, min(49.6, float(body["gain"])))
-                for key in ("sstv_enabled", "noise_enabled"):
+                if "wefax_offset_mhz" in body:
+                    conf["wefax_offset_mhz"] = max(0.0, min(500.0, float(body["wefax_offset_mhz"])))
+                if "wefax_gain" in body:
+                    conf["wefax_gain"] = max(0.0, min(49.6, float(body["wefax_gain"])))
+                if "wefax_slots" in body:
+                    slots = []
+                    for sl in body["wefax_slots"] or []:
+                        t = str(sl.get("time", "")).strip()
+                        if not re.fullmatch(r"[0-2]\d:[0-5]\d", t):
+                            raise ValueError(f"heure de créneau invalide : {t}")
+                        khz = float(str(sl.get("khz")).replace(",", "."))
+                        if not 1500 <= khz <= 30000:
+                            raise ValueError(f"fréquence WEFAX hors HF : {khz} kHz")
+                        slots.append({"time": t, "khz": khz, "dur": max(2, min(60, int(sl.get("dur") or 15)))})
+                    conf["wefax_slots"] = slots[:24]
+                for key in ("sstv_enabled", "noise_enabled", "wefax_enabled"):
                     if key in body:
                         conf[key] = bool(body[key])
                 if "sstv_min_el" in body:
