@@ -114,6 +114,7 @@ def receive_sstv(job):
 
 
 NOISE_FILE = "/var/lib/meteor/noise.json"
+NOISE_REF_FILE = "/var/lib/meteor/noise_ref.json"
 
 
 def receive_noise(job):
@@ -122,6 +123,10 @@ def receive_noise(job):
         finish({"result": "rtl_power absent"})
         return
     entry = {"time": time.time(), "gain": job["gain"], "bands": {}}
+    if job.get("manual"):
+        entry["manual"] = True             # mesure lancée à la main (hors référence nocturne)
+    if job.get("reference"):
+        entry["reference"] = True          # antenne remplacée par une charge 50 Ω : bruit propre de la clé
     for name, lo, hi in job["bands"]:
         span = hi - lo
         step = 10000 if span <= 5 else 25000
@@ -146,18 +151,20 @@ def receive_noise(job):
             entry["bands"][name] = {"median": round(vals[len(vals) // 2], 2),
                                     "p90": round(vals[int(len(vals) * 0.9)], 2),
                                     "max": round(vals[-1], 2)}
+    path = NOISE_REF_FILE if job.get("reference") else NOISE_FILE
     try:
-        with open(NOISE_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             hist = json.load(f)
     except (OSError, ValueError):
         hist = []
     if entry["bands"]:
         hist.append(entry)
-        tmp = NOISE_FILE + ".new"
+        tmp = path + ".new"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(hist[-500:], f)
-        os.replace(tmp, NOISE_FILE)
-    finish({"result": f"bruit mesuré sur {len(entry['bands'])} bande(s)"})
+            json.dump(hist[-(10 if job.get("reference") else 500):], f)
+        os.replace(tmp, path)
+    what = "référence 50 Ω" if job.get("reference") else "bruit"
+    finish({"result": f"{what} mesuré sur {len(entry['bands'])} bande(s)"})
 
 
 def receive_wefax(job):

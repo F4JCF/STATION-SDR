@@ -20,7 +20,8 @@ Port METEOR_PORT (5013) :
                                     "sstv_min_el", "noise_enabled", "noise_time"}
   POST /api/meteor/delete/<nom>    supprime une image
   GET  /api/meteor/noise           historique des relevés de bruit
-  POST /api/meteor/noise/run       relevé de bruit dès que possible
+  POST /api/meteor/noise/run       relevé de bruit dès que possible ({"reference": true} :
+                                   mesure sur charge 50 Ω, bruit propre de la clé)
 """
 
 import json
@@ -47,6 +48,7 @@ SWITCH = "http://127.0.0.1:5006"
 SATS = {57166: "Meteor-M N2-3", 59051: "Meteor-M N2-4", 25544: "ISS"}
 ISS = 25544
 NOISE_FILE = os.path.join(DATA, "noise.json")
+NOISE_REF_FILE = os.path.join(DATA, "noise_ref.json")
 NOISE_BANDS = [("Aviation 118-137", 118, 137), ("2 m 144-146", 144, 146), ("Marine 156-163", 156, 163),
                ("400-406", 400, 406), ("70 cm 430-440", 430, 440), ("ADS-B 1090", 1088, 1092)]
 KEEP = 40
@@ -306,11 +308,15 @@ def run_pass(p):
     run_job(job, p)
 
 
-def run_noise():
+def run_noise(request=None):
+    """request : None (relevé nocturne), "manual" ou "reference" (charge 50 Ω)."""
     job = {"kind": "noise", "name": time.strftime("bruit-%Y%m%d-%H%M"), "sat": "bruit", "los": time.time() + 600,
-           "gain": conf["noise_gain"], "bands": NOISE_BANDS}
-    run_job(job, {"sat": "Relevé du bruit", "kind": "noise", "aos": time.time()})
-    state["last_noise_day"] = time.strftime("%Y-%m-%d")
+           "gain": conf["noise_gain"], "bands": NOISE_BANDS,
+           "manual": request == "manual", "reference": request == "reference"}
+    label = "Référence 50 Ω" if request == "reference" else "Relevé du bruit"
+    run_job(job, {"sat": label, "kind": "noise", "aos": time.time()})
+    if not request:
+        state["last_noise_day"] = time.strftime("%Y-%m-%d")
 
 
 def wefax_slot_due():
@@ -403,8 +409,9 @@ def scheduler():
                 # Relevé du bruit : seulement si aucun passage voulu dans les 15 min
                 if noise_due(now) and not any(wanted(p) and p["aos"] - now < 900 and p["los"] > now
                                               for p in state["passes"]):
+                    req = state["noise_request"] or None
                     state["noise_request"] = False
-                    run_noise()
+                    run_noise(req if req in ("manual", "reference") else None)
         except Exception as exc:
             state["error"] = str(exc)
             log.exception("Planification")
@@ -444,7 +451,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {**state, "config": conf, "passes": passes[:16], "sstv_active": sstv_active(),
                              "noise_last": (noise_history() or [None])[-1]})
         elif path == "/api/meteor/noise":
-            self._send(200, {"bands": [b[0] for b in NOISE_BANDS], "history": noise_history()})
+            try:
+                with open(NOISE_REF_FILE, encoding="utf-8") as f:
+                    ref = json.load(f)
+            except (OSError, ValueError):
+                ref = []
+            self._send(200, {"bands": [b[0] for b in NOISE_BANDS], "history": noise_history(), "reference": ref,
+                             "noise_time": conf.get("noise_time"), "pending": state["noise_request"] or None})
         elif path == "/api/meteor/images":
             self._send(200, images())
         elif path.startswith(("/api/meteor/image/", "/api/meteor/thumb/")):
@@ -509,7 +522,12 @@ class Handler(BaseHTTPRequestHandler):
             save_conf()
             self._send(200, {"ok": True, "config": conf})
         elif path == "/api/meteor/noise/run":
-            state["noise_request"] = True
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            except ValueError:
+                body = {}
+            state["noise_request"] = "reference" if body.get("reference") else "manual"
             self._send(200, {"ok": True, "message": "relevé programmé (dans la minute, hors passage)"})
         elif path.startswith("/api/meteor/delete/"):
             name = path.rsplit("/", 1)[-1]
