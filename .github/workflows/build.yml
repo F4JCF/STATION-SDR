@@ -16,8 +16,29 @@ on:
 permissions:
   contents: write
 
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# Pas d'« artifacts » GitHub Actions (leur quota de stockage saturait et
+# bloquait la publication) : la Release est créée en brouillon, chaque
+# compilation y dépose directement son fichier, puis elle est publiée.
+# Tant qu'elle est en brouillon, la mise à jour automatique ne la voit pas.
+
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        run: |
+          if gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG déjà présente"
+          else
+            gh release create "$TAG" -R "${{ github.repository }}" --draft --generate-notes --verify-tag
+          fi
+
   windows:
+    needs: prepare
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -46,12 +67,12 @@ jobs:
             --hidden-import pystray._win32 `
             --collect-all tkintermapview --collect-all PIL run.py
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows
-          path: dist/STATION-SDR.exe
+      - name: Upload to release
+        shell: bash
+        run: gh release upload "$TAG" dist/STATION-SDR.exe --clobber -R "${{ github.repository }}"
 
   linux:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -106,10 +127,8 @@ jobs:
           if grep -q "démarrage" /tmp/station_sdr_crash.log 2>/dev/null; then exit 1; fi
           if [ "$code" != "124" ] && [ "$code" != "0" ]; then echo "Code de sortie $code"; exit 1; fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-${{ matrix.arch }}
-          path: dist/STATION-SDR-linux-${{ matrix.arch }}
+      - name: Upload to release
+        run: gh release upload "$TAG" "dist/STATION-SDR-linux-${{ matrix.arch }}" --clobber -R "${{ github.repository }}"
 
   release:
     # La version Windows est publiée même si une compilation Linux échoue.
@@ -117,20 +136,5 @@ jobs:
     if: ${{ always() && needs.windows.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: out
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          files: |
-            out/STATION-SDR.exe
-            out/STATION-SDR-linux-x86_64
-            out/STATION-SDR-linux-arm64
-          fail_on_unmatched_files: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release
+        run: gh release edit "$TAG" --draft=false --latest -R "${{ github.repository }}"
