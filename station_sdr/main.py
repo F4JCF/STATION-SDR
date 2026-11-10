@@ -53,6 +53,7 @@ from .profiles_ui import ProfilesMixin
 from .spots_ui import SpotsMixin
 from .lightning_ui import LightningMixin
 from .wefax_ui import WefaxMixin
+from .openmeteo_ui import OpenMeteoMixin
 from . import plat
 from .icao_ranges import icao_country
 
@@ -102,7 +103,7 @@ WEATHER_MAP_DEFAULT_ZOOM = 11
 
 # (clé, titre, sous-titre) des vignettes de l'écran d'accueil.
 HOME_TILES = [
-    ("weather", "Météo", "Relevé METAR local"),
+    ("weather", "Météo", "METAR local · Open-Meteo"),
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
     ("aprs", "APRS", "iGate LoRa + VHF 144,800"),
     ("ais", "AIS", "Trafic maritime"),
@@ -727,7 +728,7 @@ class _TileChip:
             self.frame.config(bg=theme.BORDER)
 
 
-class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, NoiseMixin, Wx433Mixin, AprsMsgMixin, ProfilesMixin, SpotsMixin, LightningMixin, WefaxMixin, tk.Tk):
+class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, MissionMixin, MeteorMixin, NoiseMixin, Wx433Mixin, AprsMsgMixin, ProfilesMixin, SpotsMixin, LightningMixin, WefaxMixin, OpenMeteoMixin, tk.Tk):
     SDR_LABELS = None  # rempli après la définition (libellés des modes)
 
     def __init__(self):
@@ -977,6 +978,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             map_menu.add_radiobutton(label=st["label"], value=key, variable=self._map_style_var,
                                      command=lambda k=key: self._set_map_style(k))
         app_menu.add_cascade(label="Fond de carte", menu=map_menu)
+        self._om_show_var = tk.BooleanVar(value=self.config_data.get("home_openmeteo", True))
+        app_menu.add_checkbutton(label="Vignette météo (Open-Meteo) sur l'accueil", variable=self._om_show_var,
+                                 command=self._toggle_openmeteo_band)
         app_menu.add_command(label="Arrêter la clé SDR", command=lambda: self._stop_sdr())
         app_menu.add_separator()
         self._autostart_var = tk.BooleanVar(value=self._autostart_enabled())
@@ -1247,6 +1251,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
     def _build_home_tiles(self):
         self._build_home_gauges()
+        self._build_openmeteo_band(self.home_frame)
         grid = tk.Frame(self.home_frame, bg=theme.BG)
         grid.pack(fill="both", expand=True, padx=4, pady=4)
 
@@ -1482,6 +1487,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self._pocsag_fetch_bg()
         self._rs_fetch_bg()
         self._maybe_refresh_weather_overlay()
+        self._om_maybe_fetch()
 
         self.after(0, lambda: self.chip_updated.config(text=f"Maj : {time.strftime('%H:%M:%S')}"))
 
