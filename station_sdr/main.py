@@ -633,12 +633,13 @@ class _PolarChart(tk.Canvas):
 class _Gauge(tk.Canvas):
     """Vu-mètre à aiguille (demi-cercle) avec zones vert / orange / rouge."""
 
-    def __init__(self, parent, title, unit, vmin, vmax, warn, crit, width=210, height=150, bg=None):
+    def __init__(self, parent, title, unit, vmin, vmax, warn, crit, width=210, height=150, bg=None, compact=False):
         width, height = theme.px(width), theme.px(height)
         super().__init__(parent, width=width, height=height, bg=bg or theme.BG_CARD, highlightthickness=0)
         self.title, self.unit, self.vmin, self.vmax = title, unit, vmin, vmax
         self.warn, self.crit = warn, crit
         self.w, self.h = width, height
+        self.compact = compact
         self.value = None
         self.subtitle = ""
         self._draw()
@@ -653,29 +654,45 @@ class _Gauge(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
-        cx, cy = self.w / 2, self.h - 40
-        r = min(self.w / 2 - 14, self.h - 66)
+        if self.compact:
+            # Bandeau d'accueil : valeur et sous-titre à droite de
+            # l'aiguille plutôt que dessous, pour gagner en hauteur.
+            r = min(self.h - 30, self.w * 0.28)
+            cx, cy = r + 8, self.h - 8
+        else:
+            cx, cy = self.w / 2, self.h - 40
+            r = min(self.w / 2 - 14, self.h - 66)
         box = (cx - r, cy - r, cx + r, cy + r)
-        self.create_text(cx, 10, text=self.title, fill=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold"))
+        self.create_text(cx if not self.compact else 4, 9, text=self.title, fill=theme.MUTED,
+                         font=("Segoe UI", theme.fs(9), "bold"), anchor="center" if not self.compact else "w")
+        lw = 7 if self.compact else 10
         zones = ((self.vmin, self.warn, theme.GREEN), (self.warn, self.crit, theme.ORANGE), (self.crit, self.vmax, theme.RED))
         for lo, hi, col in zones:
             a0, a1 = self._angle(lo), self._angle(hi)
-            self.create_arc(*box, start=a1, extent=a0 - a1, style="arc", outline=col, width=10)
+            self.create_arc(*box, start=a1, extent=a0 - a1, style="arc", outline=col, width=lw)
         for i in range(11):  # graduations
             v = self.vmin + (self.vmax - self.vmin) * i / 10
             ang = math.radians(self._angle(v))
-            r1, r2 = r - 9, r - (17 if i % 5 == 0 else 13)
+            r1, r2 = r - lw + 1, r - lw - (7 if i % 5 == 0 else 3)
             self.create_line(cx + r1 * math.cos(ang), cy - r1 * math.sin(ang),
                              cx + r2 * math.cos(ang), cy - r2 * math.sin(ang), fill=theme.MUTED)
         if self.value is None:
             txt, col = "—", theme.MUTED
         else:
             ang = math.radians(self._angle(self.value))
-            self.create_line(cx, cy, cx + (r - 14) * math.cos(ang), cy - (r - 14) * math.sin(ang),
+            self.create_line(cx, cy, cx + (r - lw - 4) * math.cos(ang), cy - (r - lw - 4) * math.sin(ang),
                              fill=theme.TEXT, width=3, capstyle="round")
             col = theme.RED if self.value >= self.crit else theme.ORANGE if self.value >= self.warn else theme.GREEN
             txt = f"{self.value:.0f} {self.unit}"
         self.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=theme.TEXT, outline="")
+        if self.compact:
+            tx = cx + r + 10
+            self.create_text(tx, cy - r * 0.55, text=txt, fill=col, anchor="w",
+                             font=("Segoe UI", theme.fs(13), "bold"))
+            if self.subtitle:
+                self.create_text(tx, cy - r * 0.55 + theme.px(20), text=self.subtitle, fill=theme.MUTED,
+                                 anchor="w", font=("Segoe UI", theme.fs(8)))
+            return
         self.create_text(cx, cy + 15, text=txt, fill=col, font=("Segoe UI", theme.fs(13), "bold"))
         if self.subtitle:
             self.create_text(cx, cy + 31, text=self.subtitle, fill=theme.MUTED, font=("Segoe UI", theme.fs(8)))
@@ -1134,7 +1151,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         outer = theme.card(self.home_frame)
         outer.pack(fill="x", padx=14, pady=(4, 6))
         row = outer.inner
-        row.configure(padding=(10, 8))
+        row.configure(padding=(10, 4))
         self.home_gauges = {}
         specs = (
             ("temp", "TEMPÉRATURE CPU", "°C", 30, 90, 70, 80),
@@ -1144,37 +1161,37 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         )
         for i, (key, title, unit, lo, hi, warn, crit) in enumerate(specs):
             row.grid_columnconfigure(i, weight=1)
-            g = _Gauge(row, title, unit, lo, hi, warn, crit)
+            g = _Gauge(row, title, unit, lo, hi, warn, crit, width=230, height=74, compact=True)
             g.grid(row=0, column=i, padx=6)
             self.home_gauges[key] = g
         # Voyant d'alimentation + infos
         power = tk.Frame(row, bg=theme.BG_CARD)
         power.grid(row=0, column=len(specs), padx=(16, 6), sticky="nsew")
         row.grid_columnconfigure(len(specs), weight=1)
-        tk.Label(power, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w", pady=(2, 6))
+        tk.Label(power, text="ALIMENTATION", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w", pady=(0, 2))
         led_row = tk.Frame(power, bg=theme.BG_CARD)
         led_row.pack(anchor="w")
-        self.home_power_led = tk.Canvas(led_row, width=34, height=34, bg=theme.BG_CARD, highlightthickness=0)
+        self.home_power_led = tk.Canvas(led_row, width=22, height=22, bg=theme.BG_CARD, highlightthickness=0)
         self.home_power_led.pack(side="left")
-        self._home_led_item = self.home_power_led.create_oval(3, 3, 31, 31, fill=theme.MUTED, outline="")
+        self._home_led_item = self.home_power_led.create_oval(2, 2, 20, 20, fill=theme.MUTED, outline="")
         self.home_power_text = tk.Label(led_row, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(13), "bold"))
         self.home_power_text.pack(side="left", padx=(10, 0))
         self.home_power_sub = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
-        self.home_power_sub.pack(anchor="w", pady=(8, 0))
+        self.home_power_sub.pack(anchor="w", pady=(2, 0))
         self.home_uptime = tk.Label(power, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left")
-        self.home_uptime.pack(anchor="w", pady=(2, 0))
+        self.home_uptime.pack(anchor="w", pady=(0, 0))
         # Bouton d'arrêt / relance de la clé SDR, directement sur l'accueil
         key_col = tk.Frame(row, bg=theme.BG_CARD)
         key_col.grid(row=0, column=len(specs) + 1, padx=(10, 6), sticky="ns")
-        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w", pady=(2, 6))
+        tk.Label(key_col, text="CLÉ SDR", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(9), "bold")).pack(anchor="w", pady=(0, 2))
         self.home_key_label = tk.Label(key_col, text="—", bg=theme.BG_CARD, fg=theme.TEXT, font=("Segoe UI", theme.fs(13), "bold"))
         self.home_key_label.pack(anchor="w")
         self.home_key_button = tk.Button(
             key_col, text="■  Arrêter la clé SDR", font=theme.FONT_BODY_BOLD, relief="flat", bd=0,
             bg=theme.RED, fg="#0b0f17", activebackground="#ff7b72", activeforeground="#0b0f17",
-            padx=14, pady=8, cursor="hand2", command=self._home_key_action,
+            padx=12, pady=3, cursor="hand2", command=self._home_key_action,
         )
-        self.home_key_button.pack(anchor="w", pady=(10, 0))
+        self.home_key_button.pack(anchor="w", pady=(4, 0))
 
         clickable = [outer, row, power, led_row, self.home_power_led, self.home_power_text,
                      self.home_power_sub, self.home_uptime, *self.home_gauges.values()]
