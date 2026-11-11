@@ -92,9 +92,15 @@ entendues mais sans position sur la carte.
 
 ## Installation
 
-1. Télécharger `STATION-SDR.exe` depuis les
-   [Releases](https://github.com/F4JCF/STATION-SDR/releases) du dépôt.
-2. Le lancer — aucune installation de Python n'est nécessaire.
+1. Télécharger `STATION-SDR-Setup-x.y.z.exe` depuis les
+   [Releases](https://github.com/F4JCF/STATION-SDR/releases) du dépôt,
+   le lancer et laisser cochée la case « Créer une icône sur le Bureau ».
+   L'installation se fait sans droits administrateur, dans
+   `%LOCALAPPDATA%\Programs\STATION-SDR`, avec un raccourci dans le menu
+   Démarrer et une désinstallation dans les Paramètres Windows.
+   (`STATION-SDR.exe` seul reste disponible pour une utilisation sans
+   installation.) Aucune installation de Python n'est nécessaire.
+2. Lancer STATION-SDR depuis l'icône du Bureau.
 3. Dans le menu **STATION-SDR → Paramètres**, vérifier/ajuster :
    - l'adresse IP du Raspberry Pi (par défaut `192.168.1.229`)
    - (optionnel) un jeton GitHub personnel, voir ci-dessous

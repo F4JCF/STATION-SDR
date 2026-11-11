@@ -71,6 +71,23 @@ jobs:
         shell: bash
         run: gh release upload "$TAG" dist/STATION-SDR.exe --clobber -R "${{ github.repository }}"
 
+      # Installateur (icône sur le Bureau + menu Démarrer), comme CAT Pilot.
+      # Envoyé APRÈS STATION-SDR.exe : les anciennes versions de l'appli
+      # prennent le premier .exe de la Release pour se mettre à jour.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          $ver = "${{ env.TAG }}".TrimStart("v")
+          & $iscc "/DMyVersion=$ver" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload installer to release
+        shell: bash
+        run: gh release upload "$TAG" dist/STATION-SDR-Setup-*.exe --clobber -R "${{ github.repository }}"
+
   linux:
     needs: prepare
     strategy:
