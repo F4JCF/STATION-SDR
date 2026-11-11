@@ -92,7 +92,7 @@ entendues mais sans position sur la carte.
 
 ## Installation
 
-1. Télécharger `STATION-SDR-Setup-x.y.z.exe` depuis les
+1. Télécharger `STATION-SDR_Installation-x.y.z.exe` depuis les
    [Releases](https://github.com/F4JCF/STATION-SDR/releases) du dépôt,
    le lancer et laisser cochée la case « Créer une icône sur le Bureau ».
    L'installation se fait sans droits administrateur, dans

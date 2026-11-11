@@ -72,8 +72,9 @@ jobs:
         run: gh release upload "$TAG" dist/STATION-SDR.exe --clobber -R "${{ github.repository }}"
 
       # Installateur (icône sur le Bureau + menu Démarrer), comme CAT Pilot.
-      # Envoyé APRÈS STATION-SDR.exe : les anciennes versions de l'appli
-      # prennent le premier .exe de la Release pour se mettre à jour.
+      # Nom « STATION-SDR_Installation-… » : GitHub classe les fichiers par
+      # ordre alphabétique et les versions <= 1.37.0 de l'appli prennent le
+      # premier .exe pour se mettre à jour ; ce nom passe APRES STATION-SDR.exe.
       - name: Build installer
         shell: pwsh
         run: |
@@ -86,7 +87,7 @@ jobs:
 
       - name: Upload installer to release
         shell: bash
-        run: gh release upload "$TAG" dist/STATION-SDR-Setup-*.exe --clobber -R "${{ github.repository }}"
+        run: gh release upload "$TAG" dist/STATION-SDR_Installation-*.exe --clobber -R "${{ github.repository }}"
 
   linux:
     needs: prepare

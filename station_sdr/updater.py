@@ -77,10 +77,10 @@ def check_for_update(github_token: str = "") -> dict | None:
         return None
 
     if sys.platform == "win32":
-        # L'exe lui-même, jamais l'installateur (STATION-SDR-Setup-x.y.z.exe)
+        # L'exe lui-même, jamais l'installateur (STATION-SDR_Installation-x.y.z.exe)
         assets = data.get("assets", [])
         exe_asset = next((a for a in assets if a["name"].lower() == "station-sdr.exe"), None) or next(
-            (a for a in assets if a["name"].lower().endswith(".exe") and "setup" not in a["name"].lower()), None)
+            (a for a in assets if a["name"].lower().endswith(".exe") and "installation" not in a["name"].lower()), None)
     else:
         from .plat import linux_asset_name
         wanted = linux_asset_name()
