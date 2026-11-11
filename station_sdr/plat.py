@@ -160,8 +160,60 @@ def install_menu_entry(logo_png: str) -> None:
         content = _desktop_entry()
         if not target.exists() or target.read_text(encoding="utf-8") != content:
             target.write_text(content, encoding="utf-8")
+        _install_desktop_icon(content)
     except OSError:
         pass
+
+
+def desktop_dir():
+    """Dossier du Bureau (~/Bureau en français, ~/Desktop…), ou None."""
+    home = Path.home()
+    d = ""
+    try:
+        d = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True,
+                           timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not d:
+        try:
+            cfg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "user-dirs.dirs"
+            for line in cfg.read_text(encoding="utf-8").splitlines():
+                if line.startswith("XDG_DESKTOP_DIR="):
+                    d = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(home))
+        except OSError:
+            pass
+    if not d:
+        for name in ("Bureau", "Desktop"):
+            if (home / name).is_dir():
+                d = str(home / name)
+                break
+    if not d or Path(d).resolve() == home.resolve() or not Path(d).is_dir():
+        return None
+    return Path(d)
+
+
+def _install_desktop_icon(content: str) -> None:
+    """Icône sur le Bureau au premier lancement ; chemin remis à jour ensuite.
+    Une icône supprimée par l'utilisateur n'est pas recréée."""
+    desk = desktop_dir()
+    if not desk:
+        return
+    target = desk / "station-sdr.desktop"
+    marker = config_dir() / ".icone-bureau-creee"
+    if not target.exists():
+        if marker.exists():
+            return
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("1", encoding="utf-8")
+    if not target.exists() or target.read_text(encoding="utf-8") != content:
+        target.write_text(content, encoding="utf-8")
+    target.chmod(0o755)
+    if shutil.which("gio"):          # Nemo / Nautilus : lanceur « de confiance »
+        try:
+            subprocess.run(["gio", "set", str(target), "metadata::trusted", "true"],
+                           capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
 
 def _autostart_file() -> Path:

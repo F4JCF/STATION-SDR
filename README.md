@@ -265,8 +265,9 @@ chmod +x STATION-SDR-linux-x86_64
 ./STATION-SDR-linux-x86_64
 ```
 
-Au premier lancement, un raccourci « STATION-SDR » est ajouté au menu des
-applications. Réglages dans `~/.config/STATION-SDR`. La mise à jour
+Ranger d'abord le fichier dans un dossier où il restera (ex. `~/Applications`).
+Au premier lancement, une icône « STATION-SDR » est posée sur le Bureau et
+ajoutée au menu des applications (une icône supprimée n'est pas recréée). Réglages dans `~/.config/STATION-SDR`. La mise à jour
 automatique remplace le fichier sur place. Son des alertes et des
 enregistrements : `paplay` (PulseAudio / PipeWire) ou `aplay`.
 
