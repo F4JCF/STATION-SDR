@@ -400,3 +400,9 @@ Cartes dans Documents/STATION-SDR/Wefax, redressables à la main. Sur le Pi
 (convertisseur HF requis) : créneaux quotidiens dans meteor_api (tâche
 « wefax », rtl_fm USB avec le décalage du convertisseur), décodage au
 coucher du créneau par /usr/local/bin/wefax_decode.py.
+
+Par Internet, sans radio : bouton « Télécharger la dernière carte » (et case
+« Automatique », vérification toutes les heures). L'analyse en surface
+Atlantique Nord – Europe du DWD (`ana_bwkman_dwdna`, la même que le fax de
+Hambourg) est prise sur https://opendata.dwd.de/weather/charts/analysis/ et
+rangée avec les autres cartes (fichiers `DWD_AAAAMMJJ-HHMM.png`, 12 gardées).

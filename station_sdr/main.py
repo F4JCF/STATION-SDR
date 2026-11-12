@@ -114,7 +114,7 @@ HOME_TILES = [
     ("meteor", "Images satellites", "Meteor-M · SSTV de l'ISS"),
     ("mission", "Mission / Exercice", "Veille, goniométrie, compte rendu"),
     ("spots", "Spots HF", "PSKReporter · qui m'entend"),
-    ("wefax", "WEFAX", "Cartes météo HF (DWD, Northwood)"),
+    ("wefax", "WEFAX", "Cartes météo (radio HF ou Internet)"),
     ("sats", "Satellites", "Passages ISS et satellites amateurs"),
     ("winlink", "Winlink", "Messagerie radio par paquet"),
     ("sdr", "Clé SDR", "Pilotage et partage automatique"),

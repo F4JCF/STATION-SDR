@@ -8,6 +8,8 @@ Deux sources :
 """
 
 import queue
+import re
+from urllib.parse import unquote
 import threading
 import time
 import tkinter as tk
@@ -44,6 +46,72 @@ def shear(img: np.ndarray, px_per_line: float, offset: int) -> np.ndarray:
     for i in range(img.shape[0]):
         out[i] = np.roll(img[i], -int(round(i * px_per_line)) - offset)
     return out
+
+
+DWD_DIR = "https://opendata.dwd.de/weather/charts/analysis/"
+DWD_KEY = "ana_bwkman_dwdna"          # analyse en surface (manuelle) Atlantique Nord – Europe
+DWD_LATEST = "Z__C_EDZW_LATEST_tka01,ana_bwkman_dwdna_O_000000_000000_LATEST_WV12.png"
+
+
+def dwd_latest_files(html: str):
+    """Fichiers PNG de la dernière analyse publiée : [(horodatage, nom)]."""
+    found = {}
+    for href in re.findall(r'href="([^"]+)"', html):
+        name = unquote(href).rsplit("/", 1)[-1]
+        if DWD_KEY not in name or not name.lower().endswith(".png") or "_LATEST_" in name:
+            continue
+        m = re.search(r"EDZW_(\d{14})_", name)
+        if m:
+            found.setdefault(m.group(1), set()).add(name)
+    if not found:
+        return []
+    stamp = max(found)
+    return [(stamp, n) for n in sorted(found[stamp])]
+
+
+def dwd_download_latest(dest: Path):
+    """Télécharge la dernière analyse DWD dans dest. Renvoie (message, nouvelle ?)."""
+    try:
+        from .map_tiles import USER_AGENT
+    except Exception:
+        USER_AGENT = "STATION-SDR"
+    hdr = {"User-Agent": USER_AGENT}
+    r = requests.get(DWD_DIR, headers=hdr, timeout=20)
+    r.raise_for_status()
+    files = dwd_latest_files(r.text)
+    if not files:
+        # Repli : la carte « LATEST » (nom fixe), datée par l'en-tête Last-Modified
+        h = requests.head(DWD_DIR + DWD_LATEST, headers=hdr, timeout=20)
+        if not h.ok:
+            return "Aucune carte trouvée sur le serveur du DWD.", False
+        from email.utils import parsedate_to_datetime
+        try:
+            stamp = parsedate_to_datetime(h.headers["Last-Modified"]).strftime("%Y%m%d%H%M%S")
+        except Exception:
+            stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+        files = [(stamp, DWD_LATEST)]
+    dest.mkdir(parents=True, exist_ok=True)
+    stamp = files[0][0]
+    when = f"{stamp[6:8]}/{stamp[4:6]} {stamp[8:10]}:{stamp[10:12]} UTC"
+    new = False
+    for i, (_st, name) in enumerate(files):
+        out = dest / (f"DWD_{stamp[:8]}-{stamp[8:12]}" + (f"_{i + 1}" if i else "") + ".png")
+        if out.exists():
+            continue
+        data = requests.get(DWD_DIR + name.replace(",", "%2C"), headers=hdr, timeout=60)
+        data.raise_for_status()
+        tmp = out.with_suffix(".part")
+        tmp.write_bytes(data.content)
+        tmp.replace(out)
+        new = True
+    # on garde les 12 dernières cartes DWD (les cartes reçues par radio ne sont pas touchées)
+    for old in sorted(dest.glob("DWD_*.png"), reverse=True)[12:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return (f"Nouvelle carte DWD du {when} ajoutée aux cartes reçues." if new
+            else f"Déjà à jour : dernière carte DWD du {when}."), new
 
 
 class WefaxMixin:
@@ -118,6 +186,9 @@ class WefaxMixin:
                  font=theme.FONT_SECTION).pack(anchor="w")
         self.wf_gallery = tk.Frame(right, bg=theme.BG)
         self.wf_gallery.pack(fill="both", expand=True, pady=(4, 0))
+        net = theme.card(right)
+        net.pack(fill="x", pady=(8, 0))
+        self._build_wefax_dwd(net.inner)
         pi = theme.card(right)
         pi.pack(fill="x", pady=(8, 0))
         self._build_wefax_pi(pi.inner)
@@ -130,6 +201,69 @@ class WefaxMixin:
         self._wf_update_dial()
         self.after(1500, self._wf_list_devices)
         self.after(2500, self._wf_refresh_gallery)
+        self.after(8000, self._dwd_auto_tick)
+
+    # ------------------------------------------------ Internet (DWD)
+    def _build_wefax_dwd(self, f):
+        f.configure(padding=10)
+        tk.Label(f, text="Par Internet : cartes du DWD (sans radio)", bg=theme.BG_CARD, fg=theme.TEXT,
+                 font=theme.FONT_BODY_BOLD).pack(anchor="w")
+        r = tk.Frame(f, bg=theme.BG_CARD)
+        r.pack(fill="x", pady=(4, 0))
+        ttk.Button(r, text="Télécharger la dernière carte", style="Accent.TButton",
+                   command=lambda: self._dwd_fetch(manual=True)).pack(side="left")
+        self.dwd_auto = tk.BooleanVar(value=bool(self.config_data.get("wefax_dwd_auto", True)))
+        tk.Checkbutton(r, text="Automatique", variable=self.dwd_auto, command=self._dwd_auto_changed,
+                       bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT,
+                       activebackground=theme.BG_CARD, activeforeground=theme.TEXT, font=theme.FONT_BODY,
+                       highlightthickness=0).pack(side="left", padx=10)
+        self.dwd_info = tk.Label(f, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)),
+                                 wraplength=theme.px(520), justify="left")
+        self.dwd_info.pack(anchor="w", pady=(4, 0))
+        tk.Label(f, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left",
+                 wraplength=theme.px(520),
+                 text=("Analyse en surface Atlantique Nord – Europe, la même que celle du fax de Hambourg, "
+                       "téléchargée sur le serveur public du Deutscher Wetterdienst (opendata.dwd.de). "
+                       "En automatique, une nouvelle carte est cherchée toutes les heures (environ 4 par jour).")
+                 ).pack(anchor="w", pady=(4, 0))
+        self._dwd_busy = False
+
+    def _dwd_auto_changed(self):
+        self.config_data["wefax_dwd_auto"] = bool(self.dwd_auto.get())
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+        if self.dwd_auto.get():
+            self._dwd_fetch(manual=False)
+
+    def _dwd_auto_tick(self):
+        if self.dwd_auto.get():
+            self._dwd_fetch(manual=False)
+        self.after(60 * 60 * 1000, self._dwd_auto_tick)
+
+    def _dwd_fetch(self, manual=False):
+        if self._dwd_busy:
+            return
+        self._dwd_busy = True
+        if manual:
+            self.dwd_info.config(text="Recherche de la dernière carte…")
+
+        def worker():
+            try:
+                msg, new = dwd_download_latest(wefax_dir())
+            except Exception as exc:
+                msg, new = f"Téléchargement impossible : {exc}", False
+            self.after(0, self._dwd_done, msg, new, manual)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dwd_done(self, msg, new, manual):
+        self._dwd_busy = False
+        if manual or new or not self.dwd_info.cget("text"):
+            self.dwd_info.config(text=msg)
+        if new:
+            self._wf_refresh_gallery()
 
     def _build_wefax_pi(self, f):
         f.configure(padding=10)
@@ -412,7 +546,8 @@ class WefaxMixin:
                 if src == "pc":
                     im = Image.open(it).convert("L")
                     im.thumbnail((theme.px(170), theme.px(130)))
-                    label = f"PC · {time.strftime('%d/%m %H:%M', time.localtime(it.stat().st_mtime))}"
+                    src_lbl = "DWD" if it.name.startswith("DWD_") else "PC"
+                    label = f"{src_lbl} · {time.strftime('%d/%m %H:%M', time.localtime(it.stat().st_mtime))}"
                 else:
                     import io
                     im = Image.open(io.BytesIO(it["_thumb"]))
