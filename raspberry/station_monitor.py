@@ -234,12 +234,23 @@ def _smtp_try(e: dict, msg, timeout: int, v4: bool) -> None:
                 sm.starttls()
                 sm.ehlo()
             stage = "identification"
-            sm.login(e["user"], e["password"])
+            pw = (e.get("password") or "").strip()
+            if "gmail" in host.lower() or "googlemail" in host.lower():
+                # mot de passe d'application Google : 16 lettres, affichées en 4 groupes ;
+                # le copier-coller ramène souvent des espaces (parfois insécables) refusés.
+                pw = "".join(pw.split())
+            sm.ehlo_or_helo_if_needed()
+            sm.user, sm.password = e["user"].strip(), pw
+            # Une seule méthode : sinon Gmail raccroche après le premier refus et
+            # l'erreur réelle (535, mot de passe refusé) est masquée.
+            mech = "PLAIN" if "plain" in sm.esmtp_features.get("auth", "").lower() else "LOGIN"
+            sm.auth(mech, sm.auth_plain if mech == "PLAIN" else sm.auth_login)
             stage = "envoi"
             sm.send_message(msg)
     except smtplib.SMTPAuthenticationError as exc:
-        raise RuntimeError(f"identifiant ou mot de passe refusé par {host} ({exc.smtp_code}) — "
-                           "pour Gmail, il faut un mot de passe d'application") from exc
+        detail = (exc.smtp_error or b"").decode(errors="ignore").split("\n")[0][:120]
+        raise RuntimeError(f"identifiant ou mot de passe refusé par {host} ({exc.smtp_code} {detail}) — "
+                           "pour Gmail, il faut un mot de passe d'application (16 lettres)") from exc
     except Exception as exc:
         try:
             ip = socket.getaddrinfo(host, port, socket.AF_INET if v4 else 0)[0][4][0]
