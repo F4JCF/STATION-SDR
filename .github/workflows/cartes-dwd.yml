@@ -97,6 +97,11 @@ jobs:
                       except Exception:
                           pass
                       lvl = next((p["value"] for p in info.get("parameter", []) if p.get("valueName") == "awareness_level"), "")
+                      try:
+                          if int(str(lvl).split(";")[0]) < 2:
+                              continue             # niveau vert (fin de vigilance) : ignoré
+                      except ValueError:
+                          pass
                       key = (info.get("event"), info.get("onset"), info.get("expires"))
                       if key in seen:
                           continue
@@ -115,6 +120,8 @@ jobs:
                            ("echelles_noaa", "https://services.swpc.noaa.gov/products/noaa-scales.json")):
               try:
                   d = json.loads(get(url))
+                  if key == "flux_10cm":
+                      d = sorted(d, key=lambda x: x.get("time_tag", ""))
                   prop[key] = d[-3:] if key == "flux_10cm" else d[-9:] if key == "kp_3h" else d
               except Exception as exc:
                   prop[key] = f"indisponible : {exc}"
