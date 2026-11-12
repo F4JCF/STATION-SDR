@@ -1,9 +1,10 @@
 name: Cartes DWD du matin
 
 # Chaque nuit, récupère les analyses en surface Atlantique Nord – Europe du DWD
-# (les mêmes que le fax de Hambourg) publiées ces dernières 26 heures, et les
-# garde 3 jours comme « artifact » de ce workflow. Elles servent à l'analyse
-# météo envoyée chaque matin. N'a aucun effet sur l'application ni sur les Releases.
+# (les mêmes que le fax de Hambourg) des 30 dernières heures et les range dans
+# la branche « cartes-dwd » (sans historique, écrasée à chaque fois). Elles
+# servent à l'analyse météo envoyée chaque matin. Aucun effet sur l'application,
+# la branche main ni les Releases.
 
 on:
   schedule:
@@ -11,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   cartes:
@@ -20,39 +21,47 @@ jobs:
       - name: Télécharger les analyses DWD
         run: |
           python3 - <<'PY'
-          import re, json, time, urllib.request, urllib.parse, datetime, os
+          import re, json, urllib.request, urllib.parse, datetime, os
           BASE = "https://opendata.dwd.de/weather/charts/analysis/"
           UA = {"User-Agent": "STATION-SDR (F4JCF) cartes-dwd"}
           def get(url):
               return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60).read()
           html = get(BASE).decode("utf-8", "replace")
           names = sorted({urllib.parse.unquote(h).rsplit("/", 1)[-1] for h in re.findall(r'href="([^"]+)"', html)})
-          dwdna = [n for n in names if "ana_bwkman_dwdna" in n]
-          print("Fichiers dwdna sur le serveur :")
-          for n in dwdna:
-              print("  ", n)
-          limit = (datetime.datetime.utcnow() - datetime.timedelta(hours=26)).strftime("%Y%m%d%H%M%S")
+          # analyse de 00, 06, 12, 18 UTC : WV12SW = noir et blanc (comme le fax), WV12 = couleur
+          charts = {}
+          for n in names:
+              m = re.search(r"^Z__C_EDZW_\d{14}_tka01,ana_bwkman_dwdna_O_000000_000000_(\d{12})_WV12(SW)?\.png$", n)
+              if m:
+                  charts.setdefault(m.group(1), {})["nb" if m.group(2) else "couleur"] = n
+          limit = (datetime.datetime.utcnow() - datetime.timedelta(hours=30)).strftime("%Y%m%d%H%M")
+          keep = sorted(k for k in charts if k >= limit) or sorted(charts)[-1:]
           os.makedirs("cartes", exist_ok=True)
-          got = []
-          for n in dwdna:
-              m = re.search(r"EDZW_(\d{14})_", n)
-              if not m or not n.lower().endswith(".png") or m.group(1) < limit:
-                  continue
-              out = f"cartes/DWD_{m.group(1)[:8]}-{m.group(1)[8:12]}.png"
-              if os.path.exists(out):
-                  out = out[:-4] + f"_{len(got)}.png"
-              open(out, "wb").write(get(BASE + urllib.parse.quote(n)))
-              got.append({"fichier": os.path.basename(out), "source": n})
-          if not got:
-              n = "Z__C_EDZW_LATEST_tka01,ana_bwkman_dwdna_O_000000_000000_LATEST_WV12.png"
-              open("cartes/DWD_LATEST.png", "wb").write(get(BASE + urllib.parse.quote(n)))
-              got.append({"fichier": "DWD_LATEST.png", "source": n})
-          json.dump({"recupere_utc": datetime.datetime.utcnow().isoformat(timespec="minutes"), "cartes": got},
+          index = []
+          for k in keep:
+              item = {"analyse_utc": f"{k[:4]}-{k[4:6]}-{k[6:8]} {k[8:10]}:{k[10:12]}"}
+              for kind in ("nb", "couleur"):
+                  if kind == "couleur" and k != keep[-1]:
+                      continue                     # couleur : seulement la dernière
+                  if kind in charts[k]:
+                      f = f"DWD_{k[:8]}-{k[8:12]}_{kind}.png"
+                      open(f"cartes/{f}", "wb").write(get(BASE + urllib.parse.quote(charts[k][kind])))
+                      item[kind] = f
+              index.append(item)
+          json.dump({"recupere_utc": datetime.datetime.utcnow().isoformat(timespec="minutes"),
+                     "derniere": keep[-1] if keep else None, "cartes": index},
                     open("cartes/index.json", "w"), ensure_ascii=False, indent=1)
-          print(json.dumps(got, ensure_ascii=False, indent=1))
+          print(json.dumps(index, ensure_ascii=False, indent=1))
+          if not index:
+              raise SystemExit("Aucune analyse trouvée")
           PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cartes-dwd
-          path: cartes/
-          retention-days: 3
+      - name: Ranger les cartes dans la branche cartes-dwd
+        run: |
+          cd cartes
+          git init -q -b cartes-dwd
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '# Cartes DWD\n\nAnalyses en surface Atlantique Nord – Europe du DWD (opendata.dwd.de),\nremplacées chaque nuit par le workflow « Cartes DWD du matin ». Branche sans historique.\n' > README.md
+          git add -A
+          git commit -qm "Cartes DWD $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" cartes-dwd

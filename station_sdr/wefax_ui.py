@@ -50,23 +50,24 @@ def shear(img: np.ndarray, px_per_line: float, offset: int) -> np.ndarray:
 
 DWD_DIR = "https://opendata.dwd.de/weather/charts/analysis/"
 DWD_KEY = "ana_bwkman_dwdna"          # analyse en surface (manuelle) Atlantique Nord – Europe
-DWD_LATEST = "Z__C_EDZW_LATEST_tka01,ana_bwkman_dwdna_O_000000_000000_LATEST_WV12.png"
+DWD_LATEST = "Z__C_EDZW_LATEST_tka01,ana_bwkman_dwdna_O_000000_000000_LATEST_WV12.png"   # repli
 
 
 def dwd_latest_files(html: str):
-    """Fichiers PNG de la dernière analyse publiée : [(horodatage, nom)]."""
+    """Dernière analyse publiée : [(heure d'analyse AAAAMMJJHHMM, nom du fichier)].
+    Le DWD publie chaque analyse (00, 06, 12, 18 UTC) en couleur (…_WV12.png) et
+    en noir et blanc (…_WV12SW.png, comme le fax) : on prend le noir et blanc."""
     found = {}
     for href in re.findall(r'href="([^"]+)"', html):
         name = unquote(href).rsplit("/", 1)[-1]
-        if DWD_KEY not in name or not name.lower().endswith(".png") or "_LATEST_" in name:
-            continue
-        m = re.search(r"EDZW_(\d{14})_", name)
+        m = re.search(r"^Z__C_EDZW_\d{14}_tka01," + DWD_KEY + r"_O_000000_000000_(\d{12})_WV12(SW)?\.png$", name)
         if m:
-            found.setdefault(m.group(1), set()).add(name)
+            found.setdefault(m.group(1), {})["nb" if m.group(2) else "couleur"] = name
     if not found:
         return []
     stamp = max(found)
-    return [(stamp, n) for n in sorted(found[stamp])]
+    v = found[stamp]
+    return [(stamp, v.get("nb") or v["couleur"])]
 
 
 def dwd_download_latest(dest: Path):
@@ -86,9 +87,9 @@ def dwd_download_latest(dest: Path):
             return "Aucune carte trouvée sur le serveur du DWD.", False
         from email.utils import parsedate_to_datetime
         try:
-            stamp = parsedate_to_datetime(h.headers["Last-Modified"]).strftime("%Y%m%d%H%M%S")
+            stamp = parsedate_to_datetime(h.headers["Last-Modified"]).strftime("%Y%m%d%H%M")
         except Exception:
-            stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+            stamp = time.strftime("%Y%m%d%H%M", time.gmtime())
         files = [(stamp, DWD_LATEST)]
     dest.mkdir(parents=True, exist_ok=True)
     stamp = files[0][0]
@@ -110,8 +111,8 @@ def dwd_download_latest(dest: Path):
             old.unlink()
         except OSError:
             pass
-    return (f"Nouvelle carte DWD du {when} ajoutée aux cartes reçues." if new
-            else f"Déjà à jour : dernière carte DWD du {when}."), new
+    return (f"Nouvelle carte DWD ajoutée : analyse du {when}." if new
+            else f"Déjà à jour : dernière analyse DWD du {when}."), new
 
 
 class WefaxMixin:
