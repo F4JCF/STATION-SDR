@@ -1161,8 +1161,8 @@ def build_week(days: int = 7) -> dict:
                        "aprs_stations": best("aprs_stations_max")}
     sectors = {}
     for kind, sector, mk in polar_rows:
-        sectors.setdefault(kind, {})[int(sector)] = round(mk or 0)
-    week["portee_par_secteur_30j_km"] = sectors
+        sectors.setdefault(kind, {})[f"{int(sector) * 10:03d}-{int(sector) * 10 + 10:03d}°"] = round(mk or 0)
+    week["portee_par_secteur_30j_km"] = sectors     # secteurs de 10° (relèvement depuis la station, 0° = nord)
     frames = fetch_json("http://127.0.0.1:5009/api/beacon/frames?limit=1000")
     if isinstance(frames, list):
         rec = [f for f in frames if not f.get("manual") and (f.get("time") or 0) >= since]
