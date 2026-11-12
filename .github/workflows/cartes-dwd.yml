@@ -1,4 +1,4 @@
-name: Cartes DWD du matin
+name: Cartes DWD du matin (analyses, prévisions, vigilance, propagation)
 
 # Chaque nuit, récupère les analyses en surface Atlantique Nord – Europe du DWD
 # (les mêmes que le fax de Hambourg) des 30 dernières heures et les range dans
@@ -48,10 +48,93 @@ jobs:
                       open(f"cartes/{f}", "wb").write(get(BASE + urllib.parse.quote(charts[k][kind])))
                       item[kind] = f
               index.append(item)
+          # Prévisions : pression en surface Atlantique Nord (même style que l'analyse, run de 00 UTC)
+          # et pluie sur 24 h Europe (dernier run disponible).
+          prev = []
+          FC = "https://opendata.dwd.de/weather/charts/forecasts/icon/global/"
+          def listing(url):
+              h = get(url).decode("utf-8", "replace")
+              return sorted({urllib.parse.unquote(x).rsplit("/", 1)[-1] for x in re.findall(r'href="([^"]+)"', h)})
+          def run_dt(run):
+              return datetime.datetime.strptime(run, "%Y%m%d%H%M")
+          for sub, pat, kind in (("na/", r"ico_tkb_na_N_0000(\d\d)_000000_(\d{12})_WV12\.png$", "pression"),
+                                 ("eu/", r"ico_r24_eu_N_0000(\d\d)_999999_(\d{12})_WV1\.png$", "pluie24h")):
+              try:
+                  found = {}
+                  for n in listing(FC + sub):
+                      m = re.search(r"^Z__C_EDZW_\d{14}_nwv01," + pat, n)
+                      if m:
+                          found.setdefault(m.group(2), {})[int(m.group(1))] = n
+                  if not found:
+                      continue
+                  run = max(found)
+                  for h in sorted(found[run]):
+                      valid = run_dt(run) + datetime.timedelta(hours=h)
+                      f = f"PREV_{kind}_{valid:%Y%m%d-%H%M}.png"
+                      open(f"cartes/{f}", "wb").write(get(FC + sub + urllib.parse.quote(found[run][h])))
+                      prev.append({"type": kind, "run_utc": f"{run_dt(run):%Y-%m-%d %H:%M}", "echeance_h": h,
+                                   "valable_utc": f"{valid:%Y-%m-%d %H:%M}", "fichier": f})
+              except Exception as exc:
+                  print("Prévisions", sub, "indisponibles :", exc)
+
+          # Vigilance Météo-France (rediffusée par MeteoAlarm, sans clé) pour les Alpes-Maritimes
+          vigi = {"source": "MeteoAlarm (Météo-France)", "departement": "Alpes-Maritimes", "alertes": []}
+          try:
+              data = json.loads(get("https://feeds.meteoalarm.org/api/v1/warnings/feeds-france"))
+              now = datetime.datetime.now(datetime.timezone.utc)
+              seen = set()
+              for w in data.get("warnings", []):
+                  for info in w.get("alert", {}).get("info", []):
+                      if not info.get("language", "").startswith("fr"):
+                          continue
+                      areas = info.get("area", [])
+                      if not any(a.get("areaDesc") == "Alpes-Maritimes" or
+                                 any(g.get("value") == "FRL03" for g in a.get("geocode", [])) for a in areas):
+                          continue
+                      try:
+                          if datetime.datetime.fromisoformat(info["expires"]) < now:
+                              continue
+                      except Exception:
+                          pass
+                      lvl = next((p["value"] for p in info.get("parameter", []) if p.get("valueName") == "awareness_level"), "")
+                      key = (info.get("event"), info.get("onset"), info.get("expires"))
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      vigi["alertes"].append({"evenement": info.get("event"), "niveau": lvl,
+                                              "debut": info.get("onset"), "fin": info.get("expires"),
+                                              "description": info.get("description")})
+              vigi["statut"] = "ok"
+          except Exception as exc:
+              vigi["statut"] = f"indisponible : {exc}"
+
+          # Propagation : NOAA SWPC (flux solaire, Kp, échelles R/S/G) et HamQSL (état des bandes)
+          prop = {}
+          for key, url in (("flux_10cm", "https://services.swpc.noaa.gov/json/f107_cm_flux.json"),
+                           ("kp_3h", "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"),
+                           ("echelles_noaa", "https://services.swpc.noaa.gov/products/noaa-scales.json")):
+              try:
+                  d = json.loads(get(url))
+                  prop[key] = d[-3:] if key == "flux_10cm" else d[-9:] if key == "kp_3h" else d
+              except Exception as exc:
+                  prop[key] = f"indisponible : {exc}"
+          try:
+              import xml.etree.ElementTree as ET
+              root = ET.fromstring(get("https://www.hamqsl.com/solarxml.php"))
+              sd = root.find("solardata")
+              prop["hamqsl"] = {c.tag: (c.text or "").strip() for c in sd if c.tag not in ("calculatedconditions", "calculatedvhfconditions")}
+              prop["hamqsl"]["bandes_hf"] = [{"bandes": b.get("name"), "moment": b.get("time"), "etat": (b.text or "").strip()}
+                                             for b in sd.find("calculatedconditions")]
+              prop["hamqsl"]["vhf"] = [{"phenomene": b.get("name"), "zone": b.get("location"), "etat": (b.text or "").strip()}
+                                       for b in sd.find("calculatedvhfconditions")]
+          except Exception as exc:
+              prop["hamqsl"] = f"indisponible : {exc}"
+
           json.dump({"recupere_utc": datetime.datetime.utcnow().isoformat(timespec="minutes"),
-                     "derniere": keep[-1] if keep else None, "cartes": index},
+                     "derniere": keep[-1] if keep else None, "cartes": index, "previsions": prev,
+                     "vigilance": vigi, "propagation": prop},
                     open("cartes/index.json", "w"), ensure_ascii=False, indent=1)
-          print(json.dumps(index, ensure_ascii=False, indent=1))
+          print(json.dumps({"cartes": index, "previsions": prev, "vigilance": vigi}, ensure_ascii=False, indent=1))
           if not index:
               raise SystemExit("Aucune analyse trouvée")
           PY
