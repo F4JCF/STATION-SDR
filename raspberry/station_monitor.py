@@ -28,6 +28,7 @@ import math
 import os
 import re
 import smtplib
+import socket
 import sqlite3
 import threading
 import time
@@ -181,32 +182,85 @@ def send_email(cfg: dict, title: str, message: str) -> None:
     msg["From"] = e["user"]
     msg["To"] = e["to"]
     msg.set_content(message + "\n\n-- \nNotification automatique de F4JCF-SDR-STATION")
-    port = int(e.get("smtp_port") or 465)
-    if e.get("ssl", True):
-        with smtplib.SMTP_SSL(e["smtp_host"], port, timeout=20) as s:
-            s.login(e["user"], e["password"])
-            s.send_message(msg)
-    else:
-        with smtplib.SMTP(e["smtp_host"], port, timeout=20) as s:
-            s.starttls()
-            s.login(e["user"], e["password"])
-            s.send_message(msg)
+    _smtp_send(e, msg, timeout=20)
 
 
 EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
 
 
-def _smtp_send(e: dict, msg) -> None:
-    port = int(e.get("smtp_port") or 465)
-    if e.get("ssl", True):
-        with smtplib.SMTP_SSL(e["smtp_host"], port, timeout=60) as sm:
+class _SMTPv4(smtplib.SMTP):
+    """SMTP en IPv4 uniquement (contourne une connexion IPv6 défaillante)."""
+    def _get_socket(self, host, port, timeout):
+        return _v4_socket(host, port, timeout, self.source_address)
+
+
+class _SMTPv4_SSL(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        raw = _v4_socket(host, port, timeout, self.source_address)
+        return self.context.wrap_socket(raw, server_hostname=self._host)
+
+
+def _v4_socket(host, port, timeout, source_address=None):
+    err = None
+    for af, st, proto, _cn, addr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+        sk = socket.socket(af, st, proto)
+        sk.settimeout(timeout)
+        try:
+            if source_address:
+                sk.bind(source_address)
+            sk.connect(addr)
+            return sk
+        except OSError as exc:
+            err = exc
+            sk.close()
+    raise err or OSError(f"aucune adresse IPv4 pour {host}")
+
+
+def _smtp_try(e: dict, msg, timeout: int, v4: bool) -> None:
+    host, port = e["smtp_host"], int(e.get("smtp_port") or 465)
+    ssl_mode = bool(e.get("ssl", port == 465))
+    stage = "connexion"
+    try:
+        if ssl_mode:
+            cls = _SMTPv4_SSL if v4 else smtplib.SMTP_SSL
+            sm = cls(host, port, timeout=timeout)
+        else:
+            cls = _SMTPv4 if v4 else smtplib.SMTP
+            sm = cls(host, port, timeout=timeout)
+        with sm:
+            if not ssl_mode:
+                stage = "STARTTLS"
+                sm.ehlo()
+                sm.starttls()
+                sm.ehlo()
+            stage = "identification"
             sm.login(e["user"], e["password"])
+            stage = "envoi"
             sm.send_message(msg)
-    else:
-        with smtplib.SMTP(e["smtp_host"], port, timeout=60) as sm:
-            sm.starttls()
-            sm.login(e["user"], e["password"])
-            sm.send_message(msg)
+    except smtplib.SMTPAuthenticationError as exc:
+        raise RuntimeError(f"identifiant ou mot de passe refusé par {host} ({exc.smtp_code}) — "
+                           "pour Gmail, il faut un mot de passe d'application") from exc
+    except Exception as exc:
+        try:
+            ip = socket.getaddrinfo(host, port, socket.AF_INET if v4 else 0)[0][4][0]
+        except OSError:
+            ip = "?"
+        raise RuntimeError(f"{stage} à {host}:{port} ({'SSL' if ssl_mode else 'STARTTLS'}, "
+                           f"{'IPv4' if v4 else 'auto'} {ip}) : {type(exc).__name__} {exc}") from exc
+
+
+def _smtp_send(e: dict, msg, timeout: int = 60) -> None:
+    """Envoi SMTP. En cas d'échec de connexion, nouvel essai en IPv4 seul."""
+    try:
+        _smtp_try(e, msg, timeout, v4=False)
+    except RuntimeError as first:
+        if "identifiant ou mot de passe" in str(first):
+            raise
+        try:
+            _smtp_try(e, msg, timeout, v4=True)
+        except RuntimeError as second:
+            raise RuntimeError(f"{first} | nouvel essai : {second}") from second
+    log.info("e-mail envoyé via %s", e.get("smtp_host"))
 
 
 def send_document(data: dict) -> dict:
