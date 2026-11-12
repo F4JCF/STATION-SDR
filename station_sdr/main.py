@@ -4235,7 +4235,8 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             "squawk": "Squawk 7700/7600/7500", "sart": "Balises AIS SART/EPIRB/MOB", "aprs_msg": "Messages APRS",
             "winlink": "Courrier Winlink", "undervoltage": "Sous-tension du Pi", "dongle": "Clé SDR disparue",
             "vigilance": "Vigilance orange/rouge", "beacon": "Balise 406 réelle", "beacon_test": "Balise 406 test",
-            "elt121": "Sirène 121,5 MHz",
+            "elt121": "Sirène 121,5 MHz", "es_open": "Sporadique-E 6 m / 4 m / 2 m",
+            "aurora": "Aurore (Kp fort)",
         }
         for i, (k, t) in enumerate(labels.items()):
             v = tk.BooleanVar(value=True)
@@ -4255,13 +4256,49 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         ttk.Button(rep_row, text="Aperçu", style="Flat.TButton", command=self._report_preview).pack(side="left", padx=(16, 0))
         ttk.Button(rep_row, text="Envoyer le rapport maintenant", style="Flat.TButton",
                    command=self._report_send).pack(side="left", padx=(6, 0))
+        gh_row = tk.Frame(f, bg=theme.BG_CARD)
+        gh_row.grid(row=9, column=0, columnspan=8, sticky="w", pady=(10, 0))
+        self.nt_gh_on = tk.BooleanVar(value=False)
+        tk.Checkbutton(gh_row, text="Déposer sur GitHub (cartes WEFAX radio, bilan du dimanche)", variable=self.nt_gh_on,
+                       bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+                       activeforeground=theme.TEXT, font=theme.FONT_BODY, highlightthickness=0).pack(side="left")
+        tk.Label(gh_row, text="Jeton :", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left",
+                                                                                                padx=(12, 4))
+        self.nt_gh_token = tk.StringVar()
+        ttk.Entry(gh_row, textvariable=self.nt_gh_token, width=30, show="•").pack(side="left")
+        self.nt_gh_hint = tk.Label(gh_row, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
+        self.nt_gh_hint.pack(side="left", padx=8)
+        ttk.Button(gh_row, text="Envoyer le bilan maintenant", style="Flat.TButton",
+                   command=self._gh_send_now).pack(side="left", padx=(6, 0))
+        tk.Label(f, bg=theme.BG_CARD, fg=theme.MUTED, font=("Segoe UI", theme.fs(8)), justify="left",
+                 wraplength=theme.px(1100),
+                 text=("Jeton GitHub « fine-grained » limité au dépôt F4JCF/STATION-SDR, droit « Contents : Read and "
+                       "write ». Le Pi dépose dans la branche publique « station-data » les cartes WEFAX reçues par "
+                       "radio (Pi et PC) et, le dimanche, le bilan de la semaine — jamais de POCSAG, de messages APRS "
+                       "ni de courrier Winlink.")).grid(row=10, column=0, columnspan=8, sticky="w")
         btns = tk.Frame(f, bg=theme.BG_CARD)
-        btns.grid(row=9, column=0, columnspan=8, sticky="w", pady=(10, 0))
+        btns.grid(row=11, column=0, columnspan=8, sticky="w", pady=(10, 0))
         ttk.Button(btns, text="Enregistrer", style="Accent.TButton", command=self._notify_save).pack(side="left")
         ttk.Button(btns, text="Envoyer un test", style="Flat.TButton", command=self._notify_test).pack(side="left", padx=8)
         self.nt_status = tk.Label(btns, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.nt_status.pack(side="left", padx=(8, 0))
         self._notify_loaded = False
+
+    def _gh_send_now(self):
+        host, port = self._monitor_endpoint()
+        self.nt_status.config(text="Envoi du bilan sur GitHub…", fg=theme.MUTED)
+
+        def worker():
+            try:
+                import requests
+                r = requests.post(f"http://{host}:{port}/api/monitor/github/now", timeout=90)
+                msg = ("Bilan déposé sur GitHub (branche station-data).", theme.GREEN) if r.ok else \
+                    (f"GitHub : {r.json().get('error', r.status_code)}", theme.RED)
+            except Exception as exc:
+                msg = (f"Pi injoignable ou pas à jour : {exc}", theme.RED)
+            self.after(0, lambda: self.nt_status.config(text=msg[0], fg=msg[1]))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _monitor_endpoint(self):
         return self.config_data.get("pi_host", "192.168.1.229"), self.config_data.get("port_monitor", 5008)
@@ -4294,6 +4331,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                    else "(non renseigné)")
             for k, v in self.nt_events.items():
                 v.set(bool(cfg.get("events", {}).get(k, True)))
+            g = cfg.get("github") or {}
+            self.nt_gh_on.set(bool(g.get("enabled")))
+            self.nt_gh_token.set("")
+            self.nt_gh_hint.config(text=("(jeton enregistré — laisser vide pour le garder)" if g.get("token_set")
+                                         else "(non renseigné)") if "github" in cfg else "(mettez à jour le Pi)")
             dr = cfg.get("daily_report") or {}
             self.nt_report_on.set(bool(dr.get("enabled")))
             self.nt_report_hour.set(str(dr.get("hour", 20)))
@@ -4314,6 +4356,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                       "smtp_port": port_smtp, "ssl": port_smtp == 465, "user": self.nt_vars["user"].get().strip(),
                       "password": self.nt_vars["password"].get(), "to": self.nt_vars["to"].get().strip()},
             "events": {k: v.get() for k, v in self.nt_events.items()},
+            "github": {"enabled": bool(self.nt_gh_on.get()), "token": self.nt_gh_token.get().strip()},
         }
         try:
             payload["daily_report"] = {"enabled": bool(self.nt_report_on.get()),

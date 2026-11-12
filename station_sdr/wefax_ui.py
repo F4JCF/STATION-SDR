@@ -475,8 +475,28 @@ class WefaxMixin:
             except Exception:
                 pass
         self.wf_info.config(text=f"Carte enregistrée : {path.name} ({info.get('lines', 0)} lignes)")
+        self._wf_send_to_pi(path, khz)
         self._wf_set_state("ÉCOUTE", theme.GREEN)
         self._wf_refresh_gallery()
+
+    def _wf_send_to_pi(self, path, khz):
+        """Copie la carte sur le Pi, qui la dépose sur GitHub (si activé) pour la
+        comparer à l'original du DWD dans le bulletin du matin."""
+        try:
+            host, port = self._monitor_endpoint()
+        except Exception:
+            return
+        name = time.strftime("%Y%m%d-%H%MZ", time.gmtime()) + f"_{khz:g}kHz".replace(".", ",")
+
+        def worker():
+            try:
+                import base64
+                requests.post(f"http://{host}:{port}/api/monitor/wefax", timeout=60,
+                              json={"name": name, "png_b64": base64.b64encode(Path(path).read_bytes()).decode()})
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _wf_tick(self):
         if not self._wf_stream:

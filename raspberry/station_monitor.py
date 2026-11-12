@@ -54,11 +54,15 @@ DEFAULT_CONFIG = {
               "user": "", "password": "", "to": ""},
     "events": {"squawk": True, "sart": True, "aprs_msg": True, "winlink": True,
                "undervoltage": True, "dongle": True, "vigilance": True, "beacon": True, "beacon_test": True,
-               "elt121": True},
+               "elt121": True, "es_open": True, "aurora": True},
     # Vigilance Météo-France : clé gratuite à créer sur portail-api.meteofrance.fr
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
     "daily_report": {"enabled": False, "hour": 20},
+    # Dépôt sur GitHub (branche dédiée, dépôt public) : cartes WEFAX reçues par
+    # radio et bilan hebdomadaire, lus par l'analyse météo du matin et le bilan
+    # du dimanche. Jamais de POCSAG, de messages APRS ni de courrier Winlink.
+    "github": {"enabled": False, "token": "", "repo": "F4JCF/STATION-SDR", "branch": "station-data"},
     # Station météo 433 MHz publiée sur APRS-IS (réseau CWOP / aprs.fi)
     "wx": {"enabled": False, "device": "", "ssid": "13", "comment": "STATION-SDR Mougins"},
 }
@@ -73,6 +77,8 @@ EVENT_LABELS = {
     "beacon": "Balise de détresse 406 MHz (émission réelle)",
     "beacon_test": "Balise 406 MHz en mode test / exercice",
     "elt121": "Sirène de balise sur 121,5 MHz",
+    "es_open": "Ouverture sporadique-E (6 m, 4 m, 2 m)",
+    "aurora": "Aurore possible (activité géomagnétique forte)",
 }
 VIGI_URL = "https://public-api.meteofrance.fr/public/DPVigilance/v1/cartevigilance/encours"
 VIGI_PHENOMENA = {
@@ -123,16 +129,18 @@ def public_config(cfg: dict) -> dict:
     out["email"].pop("password", None)
     out["vigilance"]["api_key_set"] = bool(cfg["vigilance"].get("api_key"))
     out["vigilance"].pop("api_key", None)
+    out["github"]["token_set"] = bool(cfg["github"].get("token"))
+    out["github"].pop("token", None)
     out["event_labels"] = EVENT_LABELS
     return out
 
 
 def update_config(data: dict) -> dict:
     cfg = load_config()
-    for section in ("ntfy", "email", "events", "vigilance", "daily_report", "wx"):
+    for section in ("ntfy", "email", "events", "vigilance", "daily_report", "wx", "github"):
         if isinstance(data.get(section), dict):
             for k, v in data[section].items():
-                if (section, k) in (("email", "password"), ("vigilance", "api_key")) and not v:
+                if (section, k) in (("email", "password"), ("vigilance", "api_key"), ("github", "token")) and not v:
                     continue  # champ vide = garder le secret actuel
                 if k in cfg[section]:
                     cfg[section][k] = v
@@ -865,8 +873,28 @@ def vigilance_loop() -> None:
         cfg = load_config()
         key, dept = cfg["vigilance"].get("api_key"), str(cfg["vigilance"].get("dept") or "06")
         if not key:
-            _vigilance.update(status="non configurée", periods=[])
-            time.sleep(60)
+            # Sans clé Météo-France : vigilances officielles rediffusées par MeteoAlarm
+            try:
+                periods = meteoalarm_periods(dept)
+                _vigilance.update(status="ok", source="MeteoAlarm", fetched_at=time.time(), periods=periods,
+                                  dept=dept)
+                for per in periods:
+                    if per["max_color"] >= 3:
+                        phen = ", ".join(f"{p['name']} ({p['color_name']})" for p in per["phenomena"]
+                                         if p["color"] >= 3)
+                        key_ev = f"vigi-ma:{per.get('begin')}:{per['max_color']}:{phen}"
+                        if event_once(key_ev, 12 * 3600):
+                            notify(f"Vigilance {per['max_color_name'].upper()} — dép. {dept}",
+                                   f"Météo-France place le département {dept} en vigilance "
+                                   f"{per['max_color_name']} : {phen} (du {per.get('begin_txt')} au "
+                                   f"{per.get('end_txt')}). Détails : vigilance.meteofrance.fr",
+                                   5 if per["max_color"] == 4 else 4, "vigilance")
+            except Exception as exc:
+                _vigilance.update(status=f"MeteoAlarm injoignable : {exc}", periods=[])
+            for _ in range(1800 // 5):
+                time.sleep(5)
+                if load_config()["vigilance"].get("api_key"):
+                    break
             continue
         try:
             data = fetch_vigilance(key.strip())
@@ -895,6 +923,343 @@ def vigilance_loop() -> None:
             if (load_config()["vigilance"].get("api_key") or "") != key:
                 _vigilance.update(status="nouvelle clé : vérification en cours…")
                 break
+
+
+METEOALARM_URL = "https://feeds.meteoalarm.org/api/v1/warnings/feeds-france"
+DEPT_NAMES = {"06": ("Alpes-Maritimes", "FRL03"), "83": ("Var", "FRL05"), "04": ("Alpes-de-Haute-Provence", "FRL01"),
+              "13": ("Bouches-du-Rhône", "FRL04"), "05": ("Hautes-Alpes", "FRL02"), "84": ("Vaucluse", "FRL06")}
+
+
+def meteoalarm_periods(dept: str) -> list:
+    """Vigilances Météo-France en cours ou à venir pour un département (MeteoAlarm, sans clé),
+    au même format que parse_vigilance."""
+    name, nuts = DEPT_NAMES.get(dept, ("Alpes-Maritimes", "FRL03"))
+    data = json.loads(urllib.request.urlopen(urllib.request.Request(
+        METEOALARM_URL, headers={"User-Agent": "STATION-SDR F4JCF"}), timeout=30).read())
+    now = time.time()
+    out = {}
+    for w in data.get("warnings", []):
+        for info in w.get("alert", {}).get("info", []):
+            if not str(info.get("language", "")).startswith("fr"):
+                continue
+            if not any(a.get("areaDesc") == name or any(g.get("value") == nuts for g in a.get("geocode", []))
+                       for a in info.get("area", [])):
+                continue
+            lvl = next((p.get("value") for p in info.get("parameter", []) if p.get("valueName") == "awareness_level"), "")
+            try:
+                color = int(str(lvl).split(";")[0])
+            except ValueError:
+                continue
+            try:
+                from datetime import datetime
+                end = datetime.fromisoformat(info["expires"]).timestamp()
+                begin = datetime.fromisoformat(info.get("onset") or info.get("effective")).timestamp()
+            except Exception:
+                end, begin = now + 3600, now
+            if color < 2 or end < now:
+                continue
+            ev = re.sub(r"^Vigilance (verte|jaune|orange|rouge) ", "", info.get("event") or "?")
+            per = out.setdefault(int(begin), {"echeance": "J" if begin < now + 86400 else "J1", "begin": int(begin),
+                                              "begin_txt": time.strftime("%d/%m %H:%M", time.localtime(begin)),
+                                              "end_txt": time.strftime("%d/%m %H:%M", time.localtime(end)),
+                                              "phenomena": [], "max_color": 1})
+            if not any(p["name"] == ev for p in per["phenomena"]):
+                per["phenomena"].append({"name": ev, "color": color, "color_name": VIGI_COLORS.get(color, "?")})
+            per["max_color"] = max(per["max_color"], color)
+    for per in out.values():
+        per["max_color_name"] = VIGI_COLORS.get(per["max_color"], "?")
+    return sorted(out.values(), key=lambda p: p["begin"])
+
+
+# ------------------------------------------- Propagation VHF / aurores --
+#
+# HamQSL (N0NBH) publie un état « E-Skip » pour l'Europe sur 6 m, 4 m et 2 m et
+# un état « aurore » ; la NOAA publie le Kp planétaire. On ne prévient qu'au
+# passage de fermé à ouvert, au plus une fois toutes les 6 h par bande.
+
+HAMQSL_URL = "https://www.hamqsl.com/solarxml.php"
+KP_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
+ES_BANDS = {"europe_6m": "6 m (50 MHz)", "europe_4m": "4 m (70 MHz)", "europe": "2 m (144 MHz)"}
+_space = {"status": "pas encore lu", "vhf": {}, "kp": None, "fetched_at": None}
+
+
+def _fetch_space():
+    import xml.etree.ElementTree as ET
+    hdr = {"User-Agent": "STATION-SDR F4JCF"}
+    root = ET.fromstring(urllib.request.urlopen(urllib.request.Request(HAMQSL_URL, headers=hdr), timeout=30).read())
+    sd = root.find("solardata")
+    vhf = {}
+    for b in sd.find("calculatedvhfconditions"):
+        vhf[(b.get("name"), b.get("location"))] = (b.text or "").strip()
+    kp = None
+    try:
+        rows = json.loads(urllib.request.urlopen(urllib.request.Request(KP_URL, headers=hdr), timeout=30).read())
+        last = rows[-1]
+        kp = float(last["Kp"] if isinstance(last, dict) else last[1])
+    except Exception:
+        pass
+    return vhf, kp, {c.tag: (c.text or "").strip() for c in sd if c.tag in ("solarflux", "kindex", "aindex", "geomagfield")}
+
+
+def space_loop() -> None:
+    prev = None
+    last_alert = {}
+    while True:
+        try:
+            vhf, kp, solar = _fetch_space()
+            _space.update(status="ok", vhf={f"{k[0]}/{k[1]}": v for k, v in vhf.items()}, kp=kp, solar=solar,
+                          fetched_at=time.time())
+            now = time.time()
+            state = {}
+            for loc, label in ES_BANDS.items():
+                st = vhf.get(("E-Skip", loc), "")
+                state[loc] = bool(st) and "closed" not in st.lower()
+            aur_txt = vhf.get(("vhf-aurora", "northern_hemi"), "")
+            state["aurora"] = (bool(aur_txt) and "closed" not in aur_txt.lower()) or (kp is not None and kp >= 6)
+            if prev is not None:
+                opened = [loc for loc in ES_BANDS if state[loc] and not prev.get(loc)
+                          and now - last_alert.get(loc, 0) > 6 * 3600]
+                if opened:
+                    for loc in opened:
+                        last_alert[loc] = now
+                    bands = ", ".join(ES_BANDS[l] for l in opened)
+                    detail = "; ".join(f"{ES_BANDS[l]} : {vhf.get(('E-Skip', l))}" for l in opened)
+                    notify(f"Sporadique-E : ouverture {bands}",
+                           f"HamQSL signale une ouverture sporadique-E en Europe ({detail}). "
+                           f"Bon moment pour écouter et appeler en {bands.split(' (')[0]}. 73 !", 4, "es_open")
+                if state["aurora"] and not prev.get("aurora") and now - last_alert.get("aurora", 0) > 12 * 3600:
+                    last_alert["aurora"] = now
+                    notify("Aurore possible — activité géomagnétique forte",
+                           f"Kp = {kp if kp is not None else '?'} ; HamQSL VHF aurore : {aur_txt or '?'}. "
+                           "Propagation aurorale possible en VHF (au nord), HF perturbée surtout aux "
+                           "hautes latitudes.", 4, "aurora")
+            prev = state
+        except Exception as exc:
+            _space.update(status=f"erreur : {exc}")
+        time.sleep(1800)
+
+
+# ------------------------------------------------- Dépôt sur GitHub --
+#
+# Branche dédiée (sans historique de code) du dépôt public : cartes WEFAX reçues
+# par radio (Pi et PC) et bilan hebdomadaire. API REST « contents » : pas de git.
+
+GH_API = "https://api.github.com"
+GH_STATE = os.path.join(os.path.dirname(DB_PATH), "github_state.json")
+WEFAX_PC_DIR = os.path.join(os.path.dirname(DB_PATH), "wefax_pc")
+METEOR_API = "http://127.0.0.1:5013"
+_gh = {"status": "non configuré", "last": None}
+
+
+def _gh_req(cfg, method, url, body=None, timeout=60):
+    g = cfg["github"]
+    req = urllib.request.Request(GH_API + url, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Bearer {g['token'].strip()}",
+                                          "Accept": "application/vnd.github+json",
+                                          "X-GitHub-Api-Version": "2022-11-28",
+                                          "User-Agent": "STATION-SDR F4JCF"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        detail = exc.read()[:200].decode(errors="ignore")
+        raise RuntimeError(f"GitHub {exc.code} : {detail}") from exc
+
+
+def _gh_ensure_branch(cfg):
+    g = cfg["github"]
+    repo, br = g["repo"], g["branch"]
+    if _gh_req(cfg, "GET", f"/repos/{repo}/git/ref/heads/{br}"):
+        return
+    readme = ("# Données de la station F4JCF-SDR-STATION\n\nCartes WEFAX reçues par radio et bilans "
+              "hebdomadaires, déposés automatiquement par le Pi (station_monitor). Branche sans code.\n")
+    blob = _gh_req(cfg, "POST", f"/repos/{repo}/git/blobs", {"content": readme, "encoding": "utf-8"})
+    tree = _gh_req(cfg, "POST", f"/repos/{repo}/git/trees",
+                   {"tree": [{"path": "README.md", "mode": "100644", "type": "blob", "sha": blob["sha"]}]})
+    commit = _gh_req(cfg, "POST", f"/repos/{repo}/git/commits",
+                     {"message": "Création de la branche des données de la station", "tree": tree["sha"], "parents": []})
+    _gh_req(cfg, "POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{br}", "sha": commit["sha"]})
+
+
+def gh_put(cfg, path, data: bytes, message):
+    import base64
+    g = cfg["github"]
+    url = f"/repos/{g['repo']}/contents/{urllib.parse.quote(path)}"
+    cur = _gh_req(cfg, "GET", f"{url}?ref={g['branch']}")
+    body = {"message": message, "branch": g["branch"], "content": base64.b64encode(data).decode()}
+    if isinstance(cur, dict) and cur.get("sha"):
+        body["sha"] = cur["sha"]
+    _gh_req(cfg, "PUT", url, body, timeout=120)
+
+
+def gh_prune(cfg, folder, keep):
+    g = cfg["github"]
+    items = _gh_req(cfg, "GET", f"/repos/{g['repo']}/contents/{folder}?ref={g['branch']}") or []
+    files = sorted((i for i in items if i.get("type") == "file" and i["name"] != "index.json"),
+                   key=lambda i: i["name"], reverse=True)
+    for i in files[keep:]:
+        _gh_req(cfg, "DELETE", f"/repos/{g['repo']}/contents/{urllib.parse.quote(i['path'])}",
+                {"message": f"Nettoyage : {i['name']}", "sha": i["sha"], "branch": g["branch"]})
+
+
+def _gh_state():
+    try:
+        with open(GH_STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _gh_save_state(st):
+    tmp = GH_STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f)
+    os.replace(tmp, GH_STATE)
+
+
+def build_week(days: int = 7) -> dict:
+    """Bilan des 7 derniers jours (sans POCSAG, messages APRS ni courrier)."""
+    end = int(time.time())
+    since = end - days * 86400
+    con = db()
+    try:
+        rows = con.execute("SELECT * FROM samples WHERE t >= ? ORDER BY t", (since,)).fetchall()
+        polar_rows = con.execute("SELECT kind, sector, MAX(max_km) FROM polar GROUP BY kind, sector").fetchall()
+    finally:
+        con.close()
+    per_day = {}
+    for r in rows:
+        d = time.strftime("%Y-%m-%d", time.localtime(r[0]))
+        x = per_day.setdefault(d, {"minutes": 0, "avions_max": 0, "adsb_portee_km": 0, "navires_max": 0,
+                                   "ais_portee_km": 0, "aprs_stations_max": 0, "temp_min": None, "temp_max": None,
+                                   "sous_tension_min": 0, "cle_absente_min": 0, "modes": {}})
+        x["minutes"] += 1
+        x["avions_max"] = max(x["avions_max"], r[1] or 0)
+        x["adsb_portee_km"] = round(max(x["adsb_portee_km"], r[3] or 0))
+        x["navires_max"] = max(x["navires_max"], r[4] or 0)
+        x["ais_portee_km"] = round(max(x["ais_portee_km"], r[5] or 0))
+        x["aprs_stations_max"] = max(x["aprs_stations_max"], r[6] or 0)
+        if r[7] is not None:
+            x["temp_min"] = r[7] if x["temp_min"] is None else min(x["temp_min"], r[7])
+            x["temp_max"] = r[7] if x["temp_max"] is None else max(x["temp_max"], r[7])
+        x["sous_tension_min"] += 1 if r[8] else 0
+        x["cle_absente_min"] += 1 if r[10] == 0 else 0
+        m = MODE_NAMES.get(r[9] or "?", r[9] or "?")
+        x["modes"][m] = x["modes"].get(m, 0) + 1
+    week = {"genere": time.strftime("%Y-%m-%d %H:%M %Z"), "du": time.strftime("%Y-%m-%d", time.localtime(since)),
+            "au": time.strftime("%Y-%m-%d", time.localtime(end)), "station": load_config().get("mycall"),
+            "jours": per_day}
+    def best(key):
+        vals = [(v[key], d) for d, v in per_day.items() if v[key]]
+        return {"valeur": max(vals)[0], "jour": max(vals)[1]} if vals else None
+    week["records"] = {"adsb_portee_km": best("adsb_portee_km"), "ais_portee_km": best("ais_portee_km"),
+                       "avions_simultanes": best("avions_max"), "navires_simultanes": best("navires_max"),
+                       "aprs_stations": best("aprs_stations_max")}
+    sectors = {}
+    for kind, sector, mk in polar_rows:
+        sectors.setdefault(kind, {})[int(sector)] = round(mk or 0)
+    week["portee_par_secteur_30j_km"] = sectors
+    frames = fetch_json("http://127.0.0.1:5009/api/beacon/frames?limit=1000")
+    if isinstance(frames, list):
+        rec = [f for f in frames if not f.get("manual") and (f.get("time") or 0) >= since]
+        week["balises_406"] = {"reelles": len({f.get("hex_id") for f in rec if not f.get("test")}),
+                               "test": len({f.get("hex_id") for f in rec if f.get("test")})}
+    elt = fetch_json("http://127.0.0.1:5011/api/elt121/events")
+    if isinstance(elt, list):
+        week["sirene_121_5_detections"] = sum(1 for e in elt if (e.get("start") or 0) >= since)
+    sensors = fetch_json("http://127.0.0.1:5010/api/433/devices")
+    if isinstance(sensors, list):
+        week["capteurs_433_actifs"] = sum(1 for d in sensors if (d.get("last_seen") or 0) >= since)
+    imgs = fetch_json(METEOR_API + "/api/meteor/images")
+    if isinstance(imgs, list):
+        recent = [i for i in imgs if (i.get("aos") or 0) >= since]
+        kinds = {}
+        for i in recent:
+            kinds[i.get("kind") or "?"] = kinds.get(i.get("kind") or "?", 0) + 1
+        week["images_recues_pi"] = kinds
+    try:
+        week["cartes_wefax_pc"] = sum(1 for f in os.listdir(WEFAX_PC_DIR)
+                                      if os.path.getmtime(os.path.join(WEFAX_PC_DIR, f)) >= since)
+    except OSError:
+        week["cartes_wefax_pc"] = 0
+    with _lock:
+        alerts = [a for a in _sent if a["time"] >= since and a["title"] != "Test de notification"]
+    week["alertes"] = [{"quand": time.strftime("%Y-%m-%d %H:%M", time.localtime(a["time"])), "titre": a["title"]}
+                       for a in alerts]
+    return week
+
+
+def github_loop() -> None:
+    """Toutes les 15 min : cartes WEFAX nouvelles ; le dimanche dès 5 h : bilan de la semaine."""
+    while True:
+        cfg = load_config()
+        g = cfg.get("github") or {}
+        if not (g.get("enabled") and g.get("token")):
+            _gh.update(status="désactivé" if not g.get("enabled") else "jeton manquant")
+            time.sleep(60)
+            continue
+        try:
+            _gh_ensure_branch(cfg)
+            st = _gh_state()
+            done = set(st.get("wefax", []))
+            n = 0
+            imgs = fetch_json(METEOR_API + "/api/meteor/images") or []
+            for it in imgs if isinstance(imgs, list) else []:
+                if it.get("kind") != "wefax" or it["name"] in done:
+                    continue
+                with urllib.request.urlopen(f"{METEOR_API}/api/meteor/image/{urllib.parse.quote(it['name'])}",
+                                            timeout=60) as r:
+                    png = r.read()
+                stamp = time.strftime("%Y%m%d-%H%M", time.gmtime(it.get("aos") or time.time()))
+                gh_put(cfg, f"wefax/RADIO_{stamp}Z_pi.png", png, f"Carte WEFAX reçue par le Pi ({it.get('sat')})")
+                done.add(it["name"]); n += 1
+            if os.path.isdir(WEFAX_PC_DIR):
+                for f in sorted(os.listdir(WEFAX_PC_DIR)):
+                    if f in done or not f.endswith(".png"):
+                        continue
+                    with open(os.path.join(WEFAX_PC_DIR, f), "rb") as fh:
+                        gh_put(cfg, f"wefax/{f}", fh.read(), "Carte WEFAX reçue par le PC")
+                    done.add(f); n += 1
+            if n:
+                gh_prune(cfg, "wefax", 40)
+            st["wefax"] = sorted(done)[-300:]
+            lt = time.localtime()
+            week_key = time.strftime("%G-W%V", lt)
+            if lt.tm_wday == 6 and lt.tm_hour >= 5 and st.get("week") != week_key:
+                data = json.dumps(build_week(), ensure_ascii=False, indent=1).encode()
+                gh_put(cfg, f"semaine/{time.strftime('%Y-%m-%d', lt)}.json", data, "Bilan de la semaine")
+                gh_put(cfg, "semaine/derniere.json", data, "Bilan de la semaine (dernier)")
+                gh_prune(cfg, "semaine", 13)
+                st["week"] = week_key
+            _gh_save_state(st)
+            _gh.update(status="ok", last=time.time(), sent=n)
+        except Exception as exc:
+            _gh.update(status=f"erreur : {exc}")
+            log.warning("Dépôt GitHub : %s", exc)
+        time.sleep(900)
+
+
+def save_pc_wefax(data: dict) -> dict:
+    import base64
+    name = re.sub(r"[^0-9A-Za-z_.,-]", "_", str(data.get("name") or ""))[:80]
+    png = base64.b64decode(data.get("png_b64") or "")
+    if not png.startswith(b"\x89PNG") or len(png) > 20_000_000:
+        raise ValueError("image PNG attendue")
+    os.makedirs(WEFAX_PC_DIR, exist_ok=True)
+    fn = f"RADIO_{name or time.strftime('%Y%m%d-%H%M')}_pc.png"
+    with open(os.path.join(WEFAX_PC_DIR, fn), "wb") as f:
+        f.write(png)
+    files = sorted(os.listdir(WEFAX_PC_DIR))
+    for old in files[:-60]:
+        try:
+            os.remove(os.path.join(WEFAX_PC_DIR, old))
+        except OSError:
+            pass
+    return {"ok": True, "file": fn}
 
 
 # ------------------------------------------------------ Rapport quotidien --
@@ -1284,6 +1649,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"title": title, "body": body})
         elif path == "/api/wx/status":
             self._send(200, wx_status())
+        elif path == "/api/monitor/extras":
+            self._send(200, {"github": _gh, "space": _space})
         elif path == "/api/vigilance":
             self._send(200, dict(_vigilance))
         elif path == "/api/monitor/notifications":
@@ -1336,6 +1703,22 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/monitor/report":
             title, body = build_report()
             self._send(200, notify(title, body, 2, force=True))
+        elif path == "/api/monitor/wefax":
+            try:
+                self._send(200, save_pc_wefax(data if isinstance(data, dict) else {}))
+            except (ValueError, OSError) as exc:
+                self._send(400, {"error": str(exc)})
+        elif path == "/api/monitor/github/now":
+            cfg = load_config()
+            try:
+                _gh_ensure_branch(cfg)
+                data_w = json.dumps(build_week(), ensure_ascii=False, indent=1).encode()
+                gh_put(cfg, "semaine/derniere.json", data_w, "Bilan de la semaine (envoi manuel)")
+                _gh.update(status="ok", last=time.time())
+                self._send(200, {"ok": True})
+            except Exception as exc:
+                _gh.update(status=f"erreur : {exc}")
+                self._send(502, {"error": str(exc)})
         elif path == "/api/monitor/test":
             res = notify("Test de notification",
                          "Si vous lisez ceci, les alertes de F4JCF-SDR-STATION arrivent bien. 73 !", 3, force=True)
@@ -1353,4 +1736,6 @@ if __name__ == "__main__":
     threading.Thread(target=vigilance_loop, daemon=True).start()
     threading.Thread(target=report_loop, daemon=True).start()
     threading.Thread(target=wx_loop, daemon=True).start()
+    threading.Thread(target=space_loop, daemon=True).start()
+    threading.Thread(target=github_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
