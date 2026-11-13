@@ -1,0 +1,284 @@
+{
+ "genere": "2026-11-13 20:57 CET",
+ "du": "2026-11-06",
+ "au": "2026-11-13",
+ "station": "F4JCF",
+ "jours": {
+  "2026-11-06": {
+   "minutes": 183,
+   "avions_max": 11,
+   "adsb_portee_km": 99,
+   "navires_max": 128,
+   "ais_portee_km": 517,
+   "aprs_stations_max": 0,
+   "temp_min": 47.8,
+   "temp_max": 54.2,
+   "sous_tension_min": 1,
+   "cle_absente_min": 0,
+   "modes": {
+    "Images satellites": 17,
+    "APRS ISS": 1,
+    "Radiosondes": 25,
+    "433 MHz": 19,
+    "ADS-B": 26,
+    "AIS": 40,
+    "POCSAG": 40,
+    "APRS": 15
+   }
+  },
+  "2026-11-07": {
+   "minutes": 1443,
+   "avions_max": 19,
+   "adsb_portee_km": 118,
+   "navires_max": 135,
+   "ais_portee_km": 517,
+   "aprs_stations_max": 0,
+   "temp_min": 44.0,
+   "temp_max": 61.8,
+   "sous_tension_min": 5,
+   "cle_absente_min": 0,
+   "modes": {
+    "Radiosondes": 127,
+    "433 MHz": 119,
+    "Images satellites": 109,
+    "ADS-B": 275,
+    "APRS": 225,
+    "AIS": 289,
+    "POCSAG": 284,
+    "?": 4,
+    "APRS ISS": 11
+   }
+  },
+  "2026-11-08": {
+   "minutes": 1429,
+   "avions_max": 15,
+   "adsb_portee_km": 128,
+   "navires_max": 139,
+   "ais_portee_km": 600,
+   "aprs_stations_max": 0,
+   "temp_min": 44.0,
+   "temp_max": 56.4,
+   "sous_tension_min": 12,
+   "cle_absente_min": 180,
+   "modes": {
+    "ADS-B": 325,
+    "APRS": 226,
+    "AIS": 285,
+    "Images satellites": 120,
+    "POCSAG": 230,
+    "Radiosondes": 116,
+    "433 MHz": 111,
+    "?": 1,
+    "APRS ISS": 15
+   }
+  },
+  "2026-11-09": {
+   "minutes": 1440,
+   "avions_max": 17,
+   "adsb_portee_km": 132,
+   "navires_max": 151,
+   "ais_portee_km": 671,
+   "aprs_stations_max": 0,
+   "temp_min": 44.0,
+   "temp_max": 66.1,
+   "sous_tension_min": 9,
+   "cle_absente_min": 143,
+   "modes": {
+    "POCSAG": 256,
+    "Images satellites": 125,
+    "Radiosondes": 135,
+    "433 MHz": 133,
+    "ADS-B": 310,
+    "APRS": 211,
+    "AIS": 261,
+    "APRS ISS": 7,
+    "?": 2
+   }
+  },
+  "2026-11-10": {
+   "minutes": 1439,
+   "avions_max": 11,
+   "adsb_portee_km": 117,
+   "navires_max": 142,
+   "ais_portee_km": 517,
+   "aprs_stations_max": 0,
+   "temp_min": 45.1,
+   "temp_max": 54.2,
+   "sous_tension_min": 4,
+   "cle_absente_min": 0,
+   "modes": {
+    "ADS-B": 264,
+    "APRS": 212,
+    "AIS": 253,
+    "POCSAG": 254,
+    "Images satellites": 227,
+    "433 MHz": 114,
+    "Radiosondes": 113,
+    "APRS ISS": 1,
+    "?": 1
+   }
+  },
+  "2026-11-11": {
+   "minutes": 1440,
+   "avions_max": 13,
+   "adsb_portee_km": 124,
+   "navires_max": 138,
+   "ais_portee_km": 671,
+   "aprs_stations_max": 1,
+   "temp_min": 45.1,
+   "temp_max": 59.1,
+   "sous_tension_min": 14,
+   "cle_absente_min": 100,
+   "modes": {
+    "APRS": 224,
+    "AIS": 239,
+    "Images satellites": 93,
+    "POCSAG": 302,
+    "Radiosondes": 146,
+    "433 MHz": 130,
+    "ADS-B": 299,
+    "APRS ISS": 7
+   }
+  },
+  "2026-11-12": {
+   "minutes": 1440,
+   "avions_max": 7,
+   "adsb_portee_km": 106,
+   "navires_max": 119,
+   "ais_portee_km": 78,
+   "aprs_stations_max": 1,
+   "temp_min": 44.0,
+   "temp_max": 56.9,
+   "sous_tension_min": 3,
+   "cle_absente_min": 987,
+   "modes": {
+    "Radiosondes": 112,
+    "433 MHz": 138,
+    "ADS-B": 342,
+    "APRS": 231,
+    "AIS": 275,
+    "Images satellites": 65,
+    "POCSAG": 273,
+    "?": 4
+   }
+  },
+  "2026-11-13": {
+   "minutes": 1258,
+   "avions_max": 15,
+   "adsb_portee_km": 102,
+   "navires_max": 123,
+   "ais_portee_km": 96,
+   "aprs_stations_max": 0,
+   "temp_min": 45.6,
+   "temp_max": 66.1,
+   "sous_tension_min": 3,
+   "cle_absente_min": 0,
+   "modes": {
+    "POCSAG": 242,
+    "Radiosondes": 110,
+    "Images satellites": 97,
+    "433 MHz": 113,
+    "ADS-B": 253,
+    "APRS": 196,
+    "AIS": 246,
+    "?": 1
+   }
+  }
+ },
+ "records": {
+  "adsb_portee_km": {
+   "valeur": 132,
+   "jour": "2026-11-09"
+  },
+  "ais_portee_km": {
+   "valeur": 671,
+   "jour": "2026-11-11"
+  },
+  "avions_simultanes": {
+   "valeur": 19,
+   "jour": "2026-11-07"
+  },
+  "navires_simultanes": {
+   "valeur": 151,
+   "jour": "2026-11-09"
+  },
+  "aprs_stations": {
+   "valeur": 1,
+   "jour": "2026-11-12"
+  }
+ },
+ "portee_par_secteur_30j_km": {
+  "adsb": {
+   "000-010°": 46,
+   "010-020°": 58,
+   "020-030°": 57,
+   "030-040°": 51,
+   "040-050°": 45,
+   "050-060°": 43,
+   "060-070°": 49,
+   "070-080°": 112,
+   "080-090°": 92,
+   "090-100°": 46,
+   "100-110°": 53,
+   "110-120°": 65,
+   "120-130°": 54,
+   "130-140°": 60,
+   "140-150°": 57,
+   "150-160°": 62,
+   "160-170°": 63,
+   "170-180°": 100,
+   "180-190°": 103,
+   "190-200°": 94,
+   "200-210°": 70,
+   "210-220°": 71,
+   "220-230°": 92,
+   "230-240°": 87,
+   "240-250°": 142,
+   "250-260°": 136,
+   "260-270°": 124,
+   "270-280°": 107,
+   "280-290°": 84,
+   "290-300°": 109,
+   "300-310°": 82,
+   "310-320°": 47,
+   "320-330°": 45,
+   "330-340°": 44,
+   "340-350°": 38,
+   "350-360°": 60
+  },
+  "ais": {
+   "050-060°": 178,
+   "060-070°": 582,
+   "070-080°": 434,
+   "080-090°": 524,
+   "090-100°": 600,
+   "100-110°": 93,
+   "110-120°": 671,
+   "120-130°": 76,
+   "130-140°": 200,
+   "140-150°": 361,
+   "150-160°": 517,
+   "160-170°": 101,
+   "170-180°": 101,
+   "180-190°": 132,
+   "190-200°": 106,
+   "200-210°": 98,
+   "210-220°": 96,
+   "220-230°": 61,
+   "230-240°": 79,
+   "240-250°": 97,
+   "250-260°": 115,
+   "260-270°": 116
+  }
+ },
+ "images_recues_pi": {
+  "lrpt": 12
+ },
+ "cartes_wefax_pc": 0,
+ "alertes": [
+  {
+   "quand": "2026-11-13 19:05",
+   "titre": "Pi en sous-tension"
+  }
+ ]
+}
