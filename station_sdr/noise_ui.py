@@ -1,6 +1,7 @@
 """Fenêtre « Bruit radio » : relevé quotidien du niveau de bruit par bande,
 mesuré par le Pi (service meteor-api, rtl_power à gain fixe)."""
 
+import math
 import statistics
 import threading
 import time
@@ -50,6 +51,8 @@ class NoiseMixin:
         self._noise_canvas = tk.Canvas(body, bg=theme.BG_CARD, highlightthickness=0)
         self._noise_canvas.pack(side="left", fill="both", expand=True)
         self._noise_canvas.bind("<Configure>", lambda _e: self._noise_draw())
+        self._noise_canvas.bind("<Motion>", self._noise_hover)
+        self._noise_canvas.bind("<Leave>", lambda _e: self._noise_canvas.delete("tip"))
         side = tk.Frame(body, bg=theme.BG, width=theme.px(470))
         side.pack(side="left", fill="y", padx=(10, 0))
         side.pack_propagate(False)
@@ -85,6 +88,11 @@ class NoiseMixin:
         self._noise_days = days
         self._noise_draw()
 
+    def _noise_fetch_if_open(self):
+        win = getattr(self, "_noise_win", None)
+        if win is not None and win.winfo_exists():
+            self._noise_fetch()
+
     def _noise_fetch(self):
         base = self._mt_base()
 
@@ -102,7 +110,9 @@ class NoiseMixin:
     # ------------------------------------------------------------ données
     def _noise_auto(self, e):
         """Relevé nocturne automatique (référence) ou mesure lancée à la main ?
-        Les anciens relevés ne portent pas l'indication : on se fie à l'heure."""
+        Les relevés récents portent le drapeau « auto » ; pour les anciens, on se fie à l'heure."""
+        if "auto" in e:
+            return bool(e["auto"])
         if e.get("manual") or e.get("reference"):
             return False
         nt = (self._noise_data or {}).get("noise_time") or "03:30"
@@ -114,20 +124,36 @@ class NoiseMixin:
         d = abs((lt.tm_hour * 60 + lt.tm_min) - (hh * 60 + mm))
         return min(d, 1440 - d) <= 90
 
-    def _noise_ref_median(self, band, before=None):
-        """Médiane des relevés nocturnes des 30 jours (avant `before`)."""
+    def _noise_ref_median(self, band, before=None, gain=None):
+        """Médiane des relevés nocturnes des 30 jours (avant `before`), au même gain
+        que `gain` si précisé : des dB relatifs pris à des gains différents ne se comparent pas."""
         hist = (self._noise_data or {}).get("history") or []
         end = before if before is not None else time.time() + 1
         vals = [e["bands"][band]["median"] for e in hist
-                if self._noise_auto(e) and end - 30 * 86400 <= e["time"] < end and band in e["bands"]]
+                if self._noise_auto(e) and end - 30 * 86400 <= e["time"] < end and band in e["bands"]
+                and (gain is None or e.get("gain") == gain)]
         return statistics.median(vals) if vals else None
 
-    def _noise_ref50(self, band):
+    def _noise_ref50(self, band, gain=None):
+        """Dernière mesure sur charge 50 Ω de la bande, au même gain si précisé."""
         ref = (self._noise_data or {}).get("reference") or []
         for e in reversed(ref):
-            if band in e.get("bands", {}):
+            if band in e.get("bands", {}) and (gain is None or e.get("gain") == gain):
                 return e["bands"][band]["median"], e["time"]
         return None, None
+
+    @staticmethod
+    def _nice_ticks(lo, hi, target=8):
+        """Graduations « rondes » (pas de 0,1 / 0,2 / 0,5 / 1 / 2 / 5 dB…) couvrant [lo, hi]."""
+        raw = (hi - lo) / max(1, target - 1)
+        mag = 10 ** math.floor(math.log10(raw))
+        step = next(m * mag for m in (1, 2, 5, 10) if m * mag >= raw)
+        first = math.ceil(lo / step - 1e-9) * step
+        ticks, v = [], first
+        while v <= hi + 1e-9:
+            ticks.append(round(v, 6))
+            v += step
+        return ticks, step
 
     @staticmethod
     def _fmt_db(v, signed=False):
@@ -159,8 +185,9 @@ class NoiseMixin:
         last = autos[-1] if autos else None
         for band in bands:
             v = (last["bands"].get(band) or {}).get("median") if last else None
-            ref = self._noise_ref_median(band, before=last["time"]) if last else None
-            r50, _t = self._noise_ref50(band)
+            g = last.get("gain") if last else None
+            ref = self._noise_ref_median(band, before=last["time"], gain=g) if last else None
+            r50, _t = self._noise_ref50(band, gain=g)
             cells = [band, self._fmt_db(v) if v is not None else "—",
                      self._fmt_db(v - ref, signed=True) if v is not None and ref is not None else "—",
                      self._fmt_db(r50) if r50 is not None else "—",
@@ -179,6 +206,7 @@ class NoiseMixin:
         if cv is None or not cv.winfo_exists():
             return
         cv.delete("all")
+        self._noise_pts = []
         w, h = max(300, cv.winfo_width()), max(200, cv.winfo_height())
         data = self._noise_data or {}
         now = time.time()
@@ -198,8 +226,10 @@ class NoiseMixin:
             return
         vals = [x["bands"][b]["median"] for x in hist for b in bands if b in x["bands"]]
         single = len(bands) == 1          # zone ±3 dB et référence 50 Ω : une bande à la fois (lisibilité)
-        refs = {b: self._noise_ref_median(b) for b in bands} if single else {}
-        r50s = {b: self._noise_ref50(b)[0] for b in bands} if single else {}
+        autos_all = [e for e in (data.get("history") or []) if self._noise_auto(e)]
+        gain = autos_all[-1].get("gain") if autos_all else None
+        refs = {b: self._noise_ref_median(b, gain=gain) for b in bands} if single else {}
+        r50s = {b: self._noise_ref50(b, gain=gain)[0] for b in bands} if single else {}
         vals += [r + d for r in refs.values() if r is not None for d in (-3, 3)]
         vals += [r for r in r50s.values() if r is not None]
         if not vals:
@@ -208,6 +238,14 @@ class NoiseMixin:
         if hi - lo < 6:
             mid = (hi + lo) / 2
             lo, hi = mid - 3, mid + 3
+        ticks, step = self._nice_ticks(lo, hi)
+        lo, hi = min(lo, ticks[0]), max(hi, ticks[-1])     # l'axe s'arrête sur des graduations
+        if ticks[0] > lo + 1e-9:
+            ticks.insert(0, ticks[0] - step)
+            lo = ticks[0]
+        if ticks[-1] < hi - 1e-9:
+            ticks.append(ticks[-1] + step)
+            hi = ticks[-1]
         x0, y0, x1, y1 = 60, 44, w - 16, h - 70
         sx = lambda t: x0 + (t - t0) / (t1 - t0) * (x1 - x0)
         sy = lambda v: y1 - (v - lo) / (hi - lo) * (y1 - y0)
@@ -225,10 +263,23 @@ class NoiseMixin:
             if k % every == 0 and k < self._noise_days:
                 cv.create_text(x + 2, y1 + 14, anchor="w", text=time.strftime("%d/%m", time.localtime(t)),
                                fill=theme.MUTED, font=small)
-        for i in range(6):
-            v = lo + (hi - lo) * i / 5
+        dec = 0 if step >= 1 else (1 if step >= 0.1 else 2)
+        for v in ticks:
             cv.create_line(x0, sy(v), x1, sy(v), fill=theme.BG_CARD_ALT, dash=(2, 4))
-            cv.create_text(x0 - 6, sy(v), anchor="e", text=f"{v:.0f}", fill=theme.MUTED, font=small)
+            cv.create_text(x0 - 6, sy(v), anchor="e", text=f"{v:.{dec}f}".replace(".", ","),
+                           fill=theme.MUTED, font=small)
+        # Changement de gain : repère vertical (les niveaux avant / après ne se comparent pas)
+        prev_gain = None
+        for x in hist:
+            g = x.get("gain")
+            if prev_gain is not None and g is not None and g != prev_gain:
+                gx = sx(x["time"])
+                cv.create_line(gx, y0, gx, y1, fill=theme.ORANGE, dash=(4, 3))
+                cv.create_text(gx + 3, y0 + 2, anchor="nw", text=f"gain {prev_gain:g} → {g:g} dB",
+                               fill=theme.ORANGE, font=small)
+            if g is not None:
+                prev_gain = g
+        self._noise_pts = []          # points survolables : (x, y, texte)
         for band in bands:
             color = NOISE_COLORS[all_bands.index(band) % len(NOISE_COLORS)]
             ref = refs.get(band)
@@ -241,18 +292,41 @@ class NoiseMixin:
                 cv.create_line(x0, sy(r50), x1, sy(r50), fill=color, dash=(1, 3), width=2)
                 cv.create_text(x1 - 4, sy(r50) - 8, anchor="e", text="clé seule (charge 50 Ω)", fill=color,
                                font=small)
+        gaps = set()
         for band in bands:
             color = NOISE_COLORS[all_bands.index(band) % len(NOISE_COLORS)]
-            auto = [(sx(x["time"]), sy(x["bands"][band]["median"])) for x in hist
-                    if band in x["bands"] and self._noise_auto(x)]
-            if len(auto) > 1:
-                cv.create_line(*[c for p in auto for c in p], fill=color, width=2)
-            for px, py in auto:                       # relevés nocturnes : points pleins
-                cv.create_oval(px - 3, py - 3, px + 3, py + 3, fill=color, outline=color)
-            for x in hist:                            # mesures à la main : points creux, hors courbe
-                if band in x["bands"] and not self._noise_auto(x):
-                    px, py = sx(x["time"]), sy(x["bands"][band]["median"])
+            autos = [x for x in hist if band in x["bands"] and self._noise_auto(x)]
+            # La courbe est coupée quand une nuit manque (plus de 36 h entre deux relevés)
+            seg = []
+            for i, x in enumerate(autos):
+                if seg and x["time"] - autos[i - 1]["time"] > 36 * 3600:
+                    if len(seg) > 1:
+                        cv.create_line(*seg, fill=color, width=2)
+                    gx = round((sx(autos[i - 1]["time"]) + sx(x["time"])) / 2)
+                    if gx not in gaps:
+                        gaps.add(gx)
+                        cv.create_text(gx, y1 - 8, text="nuit manquante", fill=theme.MUTED, font=small)
+                    seg = []
+                seg += [sx(x["time"]), sy(x["bands"][band]["median"])]
+            if len(seg) > 2:
+                cv.create_line(*seg, fill=color, width=2)
+            for x in hist:
+                if band not in x["bands"]:
+                    continue
+                v = x["bands"][band]["median"]
+                px, py = sx(x["time"]), sy(v)
+                auto = self._noise_auto(x)
+                if auto:                              # relevés nocturnes : points pleins
+                    cv.create_oval(px - 3, py - 3, px + 3, py + 3, fill=color, outline=color)
+                else:                                 # mesures à la main : points creux, hors courbe
                     cv.create_oval(px - 4, py - 4, px + 4, py + 4, fill=theme.BG_CARD, outline=color, width=2)
+                tip = (f"{band}\n{time.strftime('%d/%m/%Y %H:%M', time.localtime(x['time']))}"
+                       f"{'' if auto else ' (à la main)'}\nmédiane {self._fmt_db(v)}")
+                if x["bands"][band].get("p90") is not None:
+                    tip += f" · 90 % {self._fmt_db(x['bands'][band]['p90'])}"
+                if x.get("gain") is not None:
+                    tip += f" · gain {x['gain']:g} dB"
+                self._noise_pts.append((px, py, tip, color))
         # Légende
         for bi, band in enumerate(all_bands):
             color = NOISE_COLORS[bi % len(NOISE_COLORS)]
@@ -264,9 +338,27 @@ class NoiseMixin:
                            font=("Segoe UI", theme.fs(9)))
         cv.create_text(x1, h - 8, anchor="e", fill=theme.MUTED, font=small,
                        text=("● relevé nocturne   ○ mesure à la main (hors médiane)   ░ ±3 dB autour de la médiane   "
-                             "┄ médiane   ··· clé seule (50 Ω)") if single else
+                             "┄ médiane   ··· clé seule (50 Ω)   — survolez un point pour sa valeur") if single else
                        ("● relevé nocturne   ○ mesure à la main (hors médiane)   — choisissez une bande en haut pour "
                         "voir la zone ±3 dB et la référence 50 Ω"))
+
+    def _noise_hover(self, ev):
+        cv = self._noise_canvas
+        cv.delete("tip")
+        pts = getattr(self, "_noise_pts", None) or []
+        best = min(pts, key=lambda p: (p[0] - ev.x) ** 2 + (p[1] - ev.y) ** 2, default=None)
+        if best is None or (best[0] - ev.x) ** 2 + (best[1] - ev.y) ** 2 > 100:
+            return
+        px, py, tip, color = best
+        w = cv.winfo_width()
+        anchor = "ne" if px > w - theme.px(260) else "nw"
+        tx = px - 10 if anchor == "ne" else px + 10
+        t = cv.create_text(tx, py + 10, anchor=anchor, text=tip, fill=theme.TEXT, font=theme.FONT_SUBTITLE,
+                           justify="left", tags="tip")
+        x0, y0, x1, y1 = cv.bbox(t)
+        r = cv.create_rectangle(x0 - 6, y0 - 4, x1 + 6, y1 + 4, fill=theme.BG, outline=color, tags="tip")
+        cv.tag_lower(r, t)
+        cv.create_oval(px - 6, py - 6, px + 6, py + 6, outline=theme.TEXT, width=1, tags="tip")
 
     # ------------------------------------------------------------ mesures
     def _noise_run_now(self, reference=False):
@@ -294,6 +386,7 @@ class NoiseMixin:
             except Exception as exc:
                 msg = f"Demande refusée : {exc}"
             self.after(0, lambda: messagebox.showinfo("Bruit radio", msg, parent=self._noise_win))
-            self.after(4000, self._noise_fetch)
+            for delay in (4000, 100000, 200000, 300000):     # la mesure dure ~2 min : on actualise seul
+                self.after(delay, self._noise_fetch_if_open)
 
         threading.Thread(target=worker, daemon=True).start()

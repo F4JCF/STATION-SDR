@@ -123,6 +123,8 @@ def receive_noise(job):
         finish({"result": "rtl_power absent"})
         return
     entry = {"time": time.time(), "gain": job["gain"], "bands": {}}
+    if job.get("auto"):
+        entry["auto"] = True               # relevé nocturne planifié (référence de comparaison)
     if job.get("manual"):
         entry["manual"] = True             # mesure lancée à la main (hors référence nocturne)
     if job.get("reference"):

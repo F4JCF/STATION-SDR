@@ -308,15 +308,28 @@ def run_pass(p):
     run_job(job, p)
 
 
+NOISE_WINDOW_MIN = 180      # relevé nocturne accepté jusqu'à 3 h après l'heure prévue
+NOISE_RETRY_S = 600         # nouvel essai toutes les 10 min si la clé n'était pas disponible
+
+
 def run_noise(request=None):
     """request : None (relevé nocturne), "manual" ou "reference" (charge 50 Ω)."""
     job = {"kind": "noise", "name": time.strftime("bruit-%Y%m%d-%H%M"), "sat": "bruit", "los": time.time() + 600,
-           "gain": conf["noise_gain"], "bands": NOISE_BANDS,
+           "gain": conf["noise_gain"], "bands": NOISE_BANDS, "auto": not request,
            "manual": request == "manual", "reference": request == "reference"}
     label = "Référence 50 Ω" if request == "reference" else "Relevé du bruit"
-    run_job(job, {"sat": label, "kind": "noise", "aos": time.time()})
+    try:
+        res = run_job(job, {"sat": label, "kind": "noise", "aos": time.time()})
+    except Exception:
+        res = None
+        if request:
+            raise
     if not request:
-        state["last_noise_day"] = time.strftime("%Y-%m-%d")
+        if res is not None:
+            state["last_noise_day"] = time.strftime("%Y-%m-%d")
+        else:                       # clé en veille 121,5, bascule refusée… : on réessaiera dans la fenêtre
+            state["noise_retry_at"] = time.time() + NOISE_RETRY_S
+            log.info("Relevé de bruit nocturne non fait, nouvel essai dans %d min", NOISE_RETRY_S // 60)
 
 
 def wefax_slot_due():
@@ -348,7 +361,17 @@ def noise_due(now):
         return True
     if not conf.get("noise_enabled") or state["last_noise_day"] == time.strftime("%Y-%m-%d"):
         return False
-    return time.strftime("%H:%M") >= (conf.get("noise_time") or "03:30")
+    if now < state.get("noise_retry_at", 0):
+        return False
+    # Uniquement dans la fenêtre nocturne : un relevé fait en pleine journée (Pi redémarré, clé
+    # occupée…) ne serait pas comparable aux autres et fausserait la médiane de référence.
+    try:
+        hh, mm = (int(v) for v in (conf.get("noise_time") or "03:30").split(":"))
+    except ValueError:
+        hh, mm = 3, 30
+    lt = time.localtime(now)
+    since = (lt.tm_hour * 60 + lt.tm_min - (hh * 60 + mm)) % 1440
+    return since < NOISE_WINDOW_MIN
 
 
 def wanted(p):
@@ -548,8 +571,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_conf()
     os.makedirs(IMG_DIR, exist_ok=True)
-    hist = noise_history()
-    if hist:
-        state["last_noise_day"] = time.strftime("%Y-%m-%d", time.localtime(hist[-1]["time"]))
+    # Dernier relevé NOCTURNE (une mesure à la main ne doit pas faire sauter celui de la nuit)
+    autos = [e for e in noise_history() if e.get("auto", not e.get("manual"))]
+    if autos:
+        state["last_noise_day"] = time.strftime("%Y-%m-%d", time.localtime(autos[-1]["time"]))
     threading.Thread(target=scheduler, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
