@@ -162,7 +162,37 @@ class MaintMixin:
         if data.get("dongle_present") is False:
             txt += "  ·  ⚠ clé SDR absente de l'USB en ce moment"
             col = theme.RED
+        reboots = [r for r in data.get("auto_reboots") or [] if time.time() - r.get("time", 0) < 7 * 86400]
+        if reboots:
+            txt += (f"  ·  {len(reboots)} redémarrage(s) automatique(s) sur 7 jours, dernier le "
+                    f"{time.strftime('%d/%m à %H:%M', time.localtime(reboots[-1]['time']))}")
         lbl.config(text=txt, fg=col)
+        cb = getattr(self, "health_reboot_cb", None)
+        if cb is not None:
+            if "config" in data:
+                self.health_reboot_var.set(bool(data["config"].get("reboot_on_dongle_loss", True)))
+                cb.config(state="normal")
+            else:
+                cb.config(state="disabled")
+
+    def _watchdog_set_reboot(self):
+        host, port = self._pi_endpoint()
+        on = bool(self.health_reboot_var.get())
+
+        def worker():
+            try:
+                import requests
+                r = requests.post(f"http://{host}:{port}/api/system/watchdog",
+                                  json={"reboot_on_dongle_loss": on}, timeout=8)
+                r.raise_for_status()
+                err = None
+            except Exception as exc:
+                err = str(exc)
+            if err:
+                self.after(0, lambda: (self.health_reboot_var.set(not on),
+                                       messagebox.showwarning("Santé du Pi", f"Réglage refusé : {err}")))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------ Sauvegarde automatique --
 

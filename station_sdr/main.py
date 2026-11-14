@@ -5830,6 +5830,13 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.health_watch_label = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                                            justify="left", wraplength=theme.px(1300))
         self.health_watch_label.grid(row=4, column=0, columnspan=6, sticky="w", pady=(6, 0))
+        self.health_reboot_var = tk.BooleanVar(value=True)
+        self.health_reboot_cb = tk.Checkbutton(
+            m, text="Redémarrer le Pi automatiquement si la clé SDR disparaît de l'USB plus de 2 minutes "
+                    "(3 fois par 24 h au plus)", variable=self.health_reboot_var, command=self._watchdog_set_reboot,
+            bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+            activeforeground=theme.TEXT, font=theme.FONT_SUBTITLE, highlightthickness=0, state="disabled")
+        self.health_reboot_cb.grid(row=6, column=0, columnspan=6, sticky="w", pady=(4, 0))
         self.health_maint_status = tk.Label(m, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE,
                                             justify="left", wraplength=theme.px(1300))
         self.health_maint_status.grid(row=5, column=0, columnspan=6, sticky="w", pady=(6, 0))

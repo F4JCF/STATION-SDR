@@ -889,6 +889,82 @@ def _apply_feeds(cfg) -> list:
 _watch = {"events": collections.deque(maxlen=50), "missing": 0, "fails": 0, "last_bus_reset": 0.0}
 
 
+# Redémarrage automatique du Pi si la clé SDR disparaît de l'USB plus de 2 min
+# (souvent une clé ou un concentrateur USB bloqué que seul un redémarrage
+# relance). Garde-fous : jamais dans les 10 min qui suivent un démarrage, et
+# au plus 3 redémarrages automatiques par 24 h (au-delà : panne matérielle
+# probable, on prévient sans redémarrer en boucle).
+WATCH_CONF = os.path.join(STATE_DIR, "watchdog.json")
+REBOOT_LOG = os.path.join(STATE_DIR, "auto_reboots.json")
+REBOOT_AFTER_MIN = 2
+REBOOT_MAX_PER_DAY = 3
+
+
+def _watch_conf() -> dict:
+    try:
+        with open(WATCH_CONF, encoding="utf-8") as f:
+            c = json.load(f)
+    except (OSError, ValueError):
+        c = {}
+    return {"reboot_on_dongle_loss": bool(c.get("reboot_on_dongle_loss", True))}
+
+
+def _reboot_log() -> list:
+    try:
+        with open(REBOOT_LOG, encoding="utf-8") as f:
+            return [r for r in json.load(f) if isinstance(r, dict)][-50:]
+    except (OSError, ValueError):
+        return []
+
+
+def _uptime() -> float:
+    try:
+        return float((_read("/proc/uptime") or "0").split()[0])
+    except ValueError:
+        return 0.0
+
+
+def _notify_phone(title: str, text: str) -> None:
+    """Prévient le téléphone (ntfy) par le service de surveillance, si configuré."""
+    import urllib.request
+    try:
+        body = json.dumps({"subject": title, "summary": text, "ntfy": True, "ntfy_file": False}).encode()
+        req = urllib.request.Request("http://127.0.0.1:5008/api/monitor/send_document", data=body,
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception as exc:
+        log.warning("Notification impossible : %s", exc)
+
+
+def _auto_reboot_for_dongle(minutes: int) -> None:
+    if not _watch_conf()["reboot_on_dongle_loss"]:
+        return
+    if _uptime() < 600:
+        return
+    recent = [r for r in _reboot_log() if time.time() - r.get("time", 0) < 86400]
+    if len(recent) >= REBOOT_MAX_PER_DAY:
+        if not _watch.get("reboot_suspended_notified"):
+            _watch["reboot_suspended_notified"] = True
+            msg = (f"clé SDR toujours absente après {len(recent)} redémarrages automatiques en 24 h : "
+                   "redémarrages suspendus, vérifier la clé, le câble USB et l'alimentation")
+            _watch_event(msg)
+            _notify_phone("Clé SDR absente", msg)
+        return
+    msg = f"clé SDR absente de l'USB depuis plus de {REBOOT_AFTER_MIN} min ({minutes} min) : redémarrage automatique du Pi"
+    _watch_event(msg)
+    log_ = _reboot_log() + [{"time": time.time(), "reason": msg}]
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(REBOOT_LOG, "w", encoding="utf-8") as f:
+            json.dump(log_[-50:], f)
+        os.sync()
+    except OSError:
+        pass
+    _notify_phone("Redémarrage automatique du Pi", msg + ".")
+    time.sleep(3)
+    subprocess.run(["systemctl", "reboot"], timeout=30)
+
+
 def _watch_event(msg: str) -> None:
     log.warning("Chien de garde : %s", msg)
     _watch["events"].appendleft({"time": time.time(), "text": msg})
@@ -919,6 +995,10 @@ def _reauthorize(dev: str) -> bool:
 
 
 def _watchdog_loop() -> None:
+    last = (_reboot_log() or [None])[-1]
+    if last and time.time() - _uptime() - last.get("time", 0) < 900:
+        _watch_event("redémarrage automatique effectué (clé SDR absente) ; clé " +
+                     ("revenue sur l'USB" if _dongle_sysfs() else "toujours absente"))
     time.sleep(120)  # laisse le démarrage se faire
     while True:
         try:
@@ -931,12 +1011,15 @@ def _watchdog_loop() -> None:
                         _watch["missing"] += 1
                         if _watch["missing"] == 2:
                             _watch_event("clé SDR absente de l'USB depuis 2 minutes")
+                        if _watch["missing"] > REBOOT_AFTER_MIN:     # plus de 2 min d'absence
+                            _auto_reboot_for_dongle(_watch["missing"] - 1)
                     else:
                         if _watch["missing"] >= 2:
                             _watch_event("clé SDR revenue sur l'USB : relance du module")
                             for u in UNITS.get(mode, []):
                                 _start(u)
                         _watch["missing"] = 0
+                        _watch["reboot_suspended_notified"] = False
                         down = [u for u in UNITS.get(mode, []) if not _is_active(u)]
                         if down:
                             _watch["fails"] += 1
@@ -1031,7 +1114,8 @@ class Handler(BaseHTTPRequestHandler):
             cfg["aggregators"] = {k: v[0] for k, v in ADSB_AGGREGATORS.items()}
             self._send(200, cfg)
         elif path == "/api/system/watchdog":
-            self._send(200, {"events": list(_watch["events"]), "dongle_present": _dongle_sysfs() is not None})
+            self._send(200, {"events": list(_watch["events"]), "dongle_present": _dongle_sysfs() is not None,
+                             "config": _watch_conf(), "auto_reboots": _reboot_log()[-10:]})
         elif path == "/api/system/log-units":
             self._send(200, LOG_UNITS)
         elif path == "/api/system/backup":
@@ -1048,6 +1132,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self._path()
+        if path == "/api/system/watchdog":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                c = _watch_conf()
+                if "reboot_on_dongle_loss" in body:
+                    c["reboot_on_dongle_loss"] = bool(body["reboot_on_dongle_loss"])
+                os.makedirs(STATE_DIR, exist_ok=True)
+                with open(WATCH_CONF, "w", encoding="utf-8") as f:
+                    json.dump(c, f)
+                self._send(200, {"ok": True, "config": c})
+            except (ValueError, OSError) as exc:
+                self._send(400, {"error": str(exc)})
+            return
         if path in ("/api/system/reboot", "/api/system/shutdown"):
             action = "reboot" if path.endswith("reboot") else "shutdown"
             log.warning("Demande de %s depuis %s", action, self.address_string())
