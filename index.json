@@ -1,0 +1,353 @@
+{
+ "recupere_utc": "2026-11-14T10:56",
+ "derniere": "202611140600",
+ "cartes": [
+  {
+   "analyse_utc": "2026-11-13 06:00",
+   "nb": "DWD_20261113-0600_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-13 12:00",
+   "nb": "DWD_20261113-1200_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-13 18:00",
+   "nb": "DWD_20261113-1800_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-14 00:00",
+   "nb": "DWD_20261114-0000_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-14 06:00",
+   "nb": "DWD_20261114-0600_nb.png",
+   "couleur": "DWD_20261114-0600_couleur.png"
+  }
+ ],
+ "previsions": [
+  {
+   "type": "pression",
+   "run_utc": "2026-11-14 00:00",
+   "echeance_h": 36,
+   "valable_utc": "2026-11-15 12:00",
+   "fichier": "PREV_pression_20261115-1200.png"
+  },
+  {
+   "type": "pression",
+   "run_utc": "2026-11-14 00:00",
+   "echeance_h": 60,
+   "valable_utc": "2026-11-16 12:00",
+   "fichier": "PREV_pression_20261116-1200.png"
+  },
+  {
+   "type": "pression",
+   "run_utc": "2026-11-14 00:00",
+   "echeance_h": 84,
+   "valable_utc": "2026-11-17 12:00",
+   "fichier": "PREV_pression_20261117-1200.png"
+  },
+  {
+   "type": "pluie24h",
+   "run_utc": "2026-11-14 00:00",
+   "echeance_h": 30,
+   "valable_utc": "2026-11-15 06:00",
+   "fichier": "PREV_pluie24h_20261115-0600.png"
+  },
+  {
+   "type": "pluie24h",
+   "run_utc": "2026-11-14 00:00",
+   "echeance_h": 54,
+   "valable_utc": "2026-11-16 06:00",
+   "fichier": "PREV_pluie24h_20261116-0600.png"
+  },
+  {
+   "type": "pluie24h",
+   "run_utc": "2026-11-14 00:00",
+   "echeance_h": 78,
+   "valable_utc": "2026-11-17 06:00",
+   "fichier": "PREV_pluie24h_20261117-0600.png"
+  }
+ ],
+ "vigilance": {
+  "source": "MeteoAlarm (Météo-France)",
+  "departement": "Alpes-Maritimes",
+  "alertes": [],
+  "statut": "ok"
+ },
+ "propagation": {
+  "flux_10cm": [
+   {
+    "time_tag": "2026-11-13T17:00:00",
+    "frequency": 2800,
+    "flux": 118.0,
+    "reporting_schedule": "Morning",
+    "avg_begin_date": null,
+    "ninety_day_mean": null,
+    "rec_count": null
+   },
+   {
+    "time_tag": "2026-11-13T20:00:00",
+    "frequency": 2800,
+    "flux": 119.0,
+    "reporting_schedule": "Noon",
+    "avg_begin_date": "2026-08-16T20:00:00",
+    "ninety_day_mean": 112.0,
+    "rec_count": 90
+   },
+   {
+    "time_tag": "2026-11-13T22:00:00",
+    "frequency": 2800,
+    "flux": 118.0,
+    "reporting_schedule": "Afternoon",
+    "avg_begin_date": null,
+    "ninety_day_mean": null,
+    "rec_count": null
+   }
+  ],
+  "kp_3h": [
+   {
+    "time_tag": "2026-11-13T06:00:00",
+    "Kp": 1.33,
+    "a_running": 5,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-13T09:00:00",
+    "Kp": 1.0,
+    "a_running": 4,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-13T12:00:00",
+    "Kp": 0.67,
+    "a_running": 3,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-13T15:00:00",
+    "Kp": 0.67,
+    "a_running": 3,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-13T18:00:00",
+    "Kp": 0.67,
+    "a_running": 3,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-13T21:00:00",
+    "Kp": 0.67,
+    "a_running": 3,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-14T00:00:00",
+    "Kp": 0.33,
+    "a_running": 2,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-14T03:00:00",
+    "Kp": 0.67,
+    "a_running": 3,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-14T06:00:00",
+    "Kp": 1.0,
+    "a_running": 4,
+    "station_count": 8
+   }
+  ],
+  "echelles_noaa": {
+   "0": {
+    "DateStamp": "2026-11-14",
+    "TimeStamp": "10:54:00",
+    "R": {
+     "Scale": "0",
+     "Text": "none",
+     "MinorProb": null,
+     "MajorProb": null
+    },
+    "S": {
+     "Scale": "0",
+     "Text": "none",
+     "Prob": null
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "1": {
+    "DateStamp": "2026-11-14",
+    "TimeStamp": "10:54:00",
+    "R": {
+     "Scale": null,
+     "Text": null,
+     "MinorProb": "20",
+     "MajorProb": "5"
+    },
+    "S": {
+     "Scale": null,
+     "Text": null,
+     "Prob": "5"
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "2": {
+    "DateStamp": "2026-11-15",
+    "TimeStamp": "00:00:00",
+    "R": {
+     "Scale": null,
+     "Text": null,
+     "MinorProb": "35",
+     "MajorProb": "5"
+    },
+    "S": {
+     "Scale": null,
+     "Text": null,
+     "Prob": "5"
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "3": {
+    "DateStamp": "2026-11-16",
+    "TimeStamp": "00:00:00",
+    "R": {
+     "Scale": null,
+     "Text": null,
+     "MinorProb": "20",
+     "MajorProb": "5"
+    },
+    "S": {
+     "Scale": null,
+     "Text": null,
+     "Prob": "5"
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "-1": {
+    "DateStamp": "2026-11-13",
+    "TimeStamp": "10:54:00",
+    "R": {
+     "Scale": "0",
+     "Text": "none",
+     "MinorProb": null,
+     "MajorProb": null
+    },
+    "S": {
+     "Scale": "0",
+     "Text": "none",
+     "Prob": null
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   }
+  },
+  "hamqsl": {
+   "source": "N0NBH",
+   "updated": "14 Nov 2026 1056 GMT",
+   "solarflux": "119",
+   "aindex": "4",
+   "kindex": "1",
+   "kindexnt": "No Report",
+   "xray": "B6.5",
+   "sunspots": "132",
+   "heliumline": "120.6",
+   "protonflux": "11",
+   "electonflux": "2310",
+   "aurora": "2",
+   "normalization": "1.99",
+   "latdegree": "66.5",
+   "solarwind": "408.3",
+   "magneticfield": "1.5",
+   "geomagfield": "VR QUIET",
+   "signalnoise": "S0-S1",
+   "fof2": "",
+   "muffactor": "",
+   "muf": "NoRpt",
+   "bandes_hf": [
+    {
+     "bandes": "80m-40m",
+     "moment": "day",
+     "etat": "Fair"
+    },
+    {
+     "bandes": "30m-20m",
+     "moment": "day",
+     "etat": "Good"
+    },
+    {
+     "bandes": "17m-15m",
+     "moment": "day",
+     "etat": "Fair"
+    },
+    {
+     "bandes": "12m-10m",
+     "moment": "day",
+     "etat": "Poor"
+    },
+    {
+     "bandes": "80m-40m",
+     "moment": "night",
+     "etat": "Good"
+    },
+    {
+     "bandes": "30m-20m",
+     "moment": "night",
+     "etat": "Good"
+    },
+    {
+     "bandes": "17m-15m",
+     "moment": "night",
+     "etat": "Fair"
+    },
+    {
+     "bandes": "12m-10m",
+     "moment": "night",
+     "etat": "Poor"
+    }
+   ],
+   "vhf": [
+    {
+     "phenomene": "vhf-aurora",
+     "zone": "northern_hemi",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "europe",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "north_america",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "europe_6m",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "europe_4m",
+     "etat": "Band Closed"
+    }
+   ]
+  }
+ }
+}
