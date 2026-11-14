@@ -1375,6 +1375,19 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                     error = str(exc)
                 if "aucun service installé" in error:
                     error += " — le logiciel de ce module n'est pas encore installé sur le Pi"
+            except requests.Timeout:
+                # Bascule lente (conteneur Docker sur Pi 3) : le Pi termine souvent seul.
+                # On vérifie pendant 2 minutes avant de parler d'échec.
+                error = f"le Pi n'a pas terminé la bascule vers {label} en 2 min 30"
+                self.after(0, lambda: self.chip_sdr.config(text=f"Clé SDR → {label}… (démarrage lent)"))
+                for _ in range(24):
+                    time.sleep(5)
+                    try:
+                        if api_client.get_sdr_mode(host, port).get("mode") == mode:
+                            error = None
+                            break
+                    except Exception:
+                        pass
             except Exception as exc:
                 error = f"service de bascule du Pi injoignable ({exc})"
             self.after(0, done, error)

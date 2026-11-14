@@ -74,7 +74,8 @@ def set_sdr_mode(host: str, port: int, mode: str) -> dict:
     Délai plus long : arrêter un service puis en démarrer un autre prend
     quelques secondes."""
     url = f"http://{host}:{port}/api/sdr/mode/{mode}"
-    resp = requests.post(url, timeout=45)
+    # Les modules en conteneur Docker (radiosondes, OpenWebRX) démarrent lentement sur un Pi 3.
+    resp = requests.post(url, timeout=(6, 30))
     resp.raise_for_status()
     return resp.json()
 

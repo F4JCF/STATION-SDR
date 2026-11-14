@@ -80,9 +80,9 @@ def _systemctl(*args) -> subprocess.CompletedProcess:
     return subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=60)
 
 
-def _docker(*args) -> subprocess.CompletedProcess:
+def _docker(*args, timeout=120) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=60)
+        return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
@@ -142,14 +142,18 @@ def _is_active(unit: str) -> bool:
 
 def _stop(unit: str) -> None:
     if unit.startswith("docker:"):
-        _docker("stop", unit[7:])
+        _docker("stop", "-t", "5", unit[7:])
     else:
         _systemctl("stop", f"{unit}.service")
 
 
 def _start(unit: str) -> bool:
     if unit.startswith("docker:"):
-        return _docker("restart", unit[7:]).returncode == 0
+        # « start » si le conteneur est arrêté (bien plus rapide que « restart »
+        # qui attend d'abord son arrêt), « restart » s'il tourne déjà.
+        if _is_active(unit):
+            return _docker("restart", "-t", "5", unit[7:]).returncode == 0
+        return _docker("start", unit[7:]).returncode == 0
     return _systemctl("restart", f"{unit}.service").returncode == 0
 
 
