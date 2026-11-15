@@ -4266,6 +4266,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.nt_report_hour = tk.StringVar(value="20")
         ttk.Spinbox(rep_row, from_=0, to=23, width=4, textvariable=self.nt_report_hour).pack(side="left", padx=4)
         tk.Label(rep_row, text="h", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_BODY).pack(side="left")
+        self.nt_report_meteo = tk.BooleanVar(value=True)
+        tk.Checkbutton(rep_row, text="+ météo du matin et cartes (e-mail)", variable=self.nt_report_meteo,
+                       bg=theme.BG_CARD, fg=theme.TEXT, selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD,
+                       activeforeground=theme.TEXT, font=theme.FONT_BODY,
+                       highlightthickness=0).pack(side="left", padx=(12, 0))
         ttk.Button(rep_row, text="Aperçu", style="Flat.TButton", command=self._report_preview).pack(side="left", padx=(16, 0))
         ttk.Button(rep_row, text="Envoyer le rapport maintenant", style="Flat.TButton",
                    command=self._report_send).pack(side="left", padx=(6, 0))
@@ -4352,6 +4357,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             dr = cfg.get("daily_report") or {}
             self.nt_report_on.set(bool(dr.get("enabled")))
             self.nt_report_hour.set(str(dr.get("hour", 20)))
+            self.nt_report_meteo.set(bool(dr.get("meteo", True)))
             self._notify_loaded = True
             self.nt_status.config(text="Réglages chargés depuis le Pi.", fg=theme.MUTED)
 
@@ -4376,6 +4382,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                        "hour": max(0, min(23, int(self.nt_report_hour.get())))}
         except ValueError:
             payload["daily_report"] = {"enabled": bool(self.nt_report_on.get()), "hour": 20}
+        payload["daily_report"]["meteo"] = bool(self.nt_report_meteo.get())
         host, port = self._monitor_endpoint()
         self.nt_status.config(text="Enregistrement…", fg=theme.MUTED)
 
@@ -4403,7 +4410,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
 
         def worker():
             try:
-                r = requests.get(f"http://{host}:{port}/api/monitor/report", timeout=15)
+                r = requests.get(f"http://{host}:{port}/api/monitor/report", timeout=45)
                 r.raise_for_status()
                 d = r.json()
                 self.after(0, lambda: messagebox.showinfo(d.get("title", "Rapport"), d.get("body", "")))
@@ -4419,7 +4426,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         def send():
             def worker():
                 try:
-                    r = requests.post(f"http://{host}:{port}/api/monitor/report", timeout=40)
+                    r = requests.post(f"http://{host}:{port}/api/monitor/report", timeout=240)
                     r.raise_for_status()
                     ch = r.json().get("channels") or {}
                     txt = ("Rapport envoyé : " + ", ".join(f"{k} {v}" for k, v in ch.items())) if ch else \

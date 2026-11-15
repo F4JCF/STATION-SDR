@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     # Vigilance Météo-France : clé gratuite à créer sur portail-api.meteofrance.fr
     # (API « Données Publiques Vigilance »).
     "vigilance": {"api_key": "", "dept": "06"},
-    "daily_report": {"enabled": False, "hour": 20},
+    "daily_report": {"enabled": False, "hour": 20, "meteo": True},
     # Dépôt sur GitHub (branche dédiée, dépôt public) : cartes WEFAX reçues par
     # radio et bilan hebdomadaire, lus par l'analyse météo du matin et le bilan
     # du dimanche. Jamais de POCSAG, de messages APRS ni de courrier Winlink.
@@ -181,7 +181,7 @@ def lan_ip():
         return None
 
 
-def send_email(cfg: dict, title: str, message: str) -> None:
+def send_email(cfg: dict, title: str, message: str, attachments=None) -> None:
     e = cfg["email"]
     if not (e.get("smtp_host") and e.get("user") and e.get("password") and e.get("to")):
         raise ValueError("e-mail incomplet (serveur, identifiant, mot de passe, destinataire)")
@@ -190,7 +190,9 @@ def send_email(cfg: dict, title: str, message: str) -> None:
     msg["From"] = e["user"]
     msg["To"] = e["to"]
     msg.set_content(message + "\n\n-- \nNotification automatique de F4JCF-SDR-STATION")
-    _smtp_send(e, msg, timeout=20)
+    for name, data in attachments or []:
+        msg.add_attachment(data, maintype="image", subtype="png", filename=name)
+    _smtp_send(e, msg, timeout=120 if attachments else 20)
 
 
 EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
@@ -348,7 +350,8 @@ def send_document(data: dict) -> dict:
     return result
 
 
-def notify(title: str, message: str, priority: int = 4, event: str = None, force: bool = False) -> dict:
+def notify(title: str, message: str, priority: int = 4, event: str = None, force: bool = False,
+           attachments=None, phone_message: str = None) -> dict:
     cfg = load_config()
     if event == "pocsag":
         return {"channels": {}, "skipped": "POCSAG jamais relayé hors du réseau local"}
@@ -358,13 +361,13 @@ def notify(title: str, message: str, priority: int = 4, event: str = None, force
     if cfg["ntfy"].get("enabled") or force:
         if cfg["ntfy"].get("topic"):
             try:
-                send_ntfy(cfg, title, message, priority)
+                send_ntfy(cfg, title, phone_message or message, priority)
                 result["channels"]["ntfy"] = "ok"
             except Exception as exc:
                 result["channels"]["ntfy"] = f"échec : {exc}"
     if cfg["email"].get("enabled") or (force and cfg["email"].get("password")):
         try:
-            send_email(cfg, title, message)
+            send_email(cfg, title, message, attachments)
             result["channels"]["email"] = "ok"
         except Exception as exc:
             result["channels"]["email"] = f"échec : {exc}"
@@ -1334,6 +1337,105 @@ def build_report(hours: int = 24) -> tuple:
     return title, "\n".join(lines) if lines else "Pas encore de données."
 
 
+# Météo du matin : le texte est écrit chaque matin (vers 6 h 40) par la tâche
+# programmée « Analyse météo du matin » dans la branche « bulletin » du dépôt,
+# les cartes sont rangées chaque nuit dans la branche « cartes-dwd ».
+RAW = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+METEO_WAIT_MIN = 45          # attente maximale du bulletin après l'heure du rapport
+_bulletin_try = {"t": 0}
+
+
+def _raw(cfg: dict, branch: str, path: str, timeout: int = 30) -> bytes:
+    repo = (cfg.get("github") or {}).get("repo") or "F4JCF/STATION-SDR"
+    url = RAW.format(repo=repo, branch=branch, path=urllib.parse.quote(path)) + f"?t={int(time.time())}"
+    req = urllib.request.Request(url, headers={"User-Agent": "STATION-SDR station-monitor",
+                                               "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def fetch_bulletin(cfg: dict):
+    """Bulletin météo du jour (dict) ou None s'il n'est pas (encore) écrit."""
+    try:
+        b = json.loads(_raw(cfg, "bulletin", "bulletin.json", 20).decode("utf-8"))
+    except Exception as exc:
+        log.info("Bulletin météo indisponible : %s", exc)
+        return None
+    return b if isinstance(b, dict) and b.get("date") == time.strftime("%Y-%m-%d") and b.get("texte") else None
+
+
+def _utc_label(s: str, paris: bool = False) -> str:
+    """'2026-11-15 06:00' -> '15/11 06:00 UTC' (ou heure de Paris)."""
+    try:
+        import calendar
+        t = calendar.timegm(time.strptime(s, "%Y-%m-%d %H:%M"))
+        if paris:
+            return time.strftime("%d/%m %Hh", time.localtime(t))
+        return time.strftime("%d/%m %H:%M UTC", time.gmtime(t))
+    except (ValueError, OverflowError):
+        return s
+
+
+def fetch_charts(cfg: dict) -> tuple:
+    """Cartes DWD à joindre : dernière analyse (noir et blanc + couleur), prévisions
+    de pression, première carte de pluie sur 24 h. Retourne (pièces, légendes)."""
+    try:
+        idx = json.loads(_raw(cfg, "cartes-dwd", "index.json").decode("utf-8"))
+    except Exception as exc:
+        return [], [f"Cartes DWD indisponibles ({exc})."]
+    wanted = []
+    last = (idx.get("cartes") or [{}])[-1]
+    when = _utc_label(last.get("analyse_utc", ""))
+    if last.get("nb"):
+        wanted.append((last["nb"], f"Analyse DWD du {when}"))
+    if last.get("couleur"):
+        wanted.append((last["couleur"], f"Analyse DWD du {when} (couleur)"))
+    prev = idx.get("previsions") or []
+    for p in prev:
+        if p.get("type") == "pression":
+            wanted.append((p["fichier"], f"Prévision pression du {_utc_label(p['valable_utc'], True)} (heure de Paris)"))
+    for p in prev:
+        if p.get("type") == "pluie24h":
+            wanted.append((p["fichier"], f"Pluie sur 24 h jusqu'au {_utc_label(p['valable_utc'], True)}"))
+            break
+    files, labels = [], []
+    for name, label in wanted:
+        try:
+            files.append((name, _raw(cfg, "cartes-dwd", name, 90)))
+            labels.append(f"- {label} : {name}")
+        except Exception as exc:
+            labels.append(f"- {label} : non téléchargée ({exc})")
+    return files, labels
+
+
+def build_meteo(cfg: dict, bulletin=None, with_files: bool = True) -> tuple:
+    """Partie météo du rapport : (texte, pièces jointes, résumé pour le téléphone)."""
+    b = bulletin if bulletin is not None else fetch_bulletin(cfg)
+    lines = ["", "", "MÉTÉO DU MATIN", ""]
+    if b:
+        lines.append(b["texte"].strip())
+        short = (b.get("resume") or "").strip()
+    else:
+        lines.append("L'analyse météo de ce matin n'est pas disponible (la tâche du matin n'a pas encore "
+                     "écrit son bulletin, ou elle a échoué). Les cartes DWD sont tout de même jointes.")
+        short = ""
+    files, labels = fetch_charts(cfg) if with_files else ([], [])
+    if labels:
+        lines += ["", "CARTES JOINTES", *labels]
+    return "\n".join(lines), files, short
+
+
+def send_daily_report(bulletin=None, force: bool = False) -> dict:
+    cfg = load_config()
+    title, body = build_report()
+    files, phone = [], body
+    if (cfg.get("daily_report") or {}).get("meteo", True):
+        meteo, files, short = build_meteo(cfg, bulletin)
+        body += meteo
+        phone += "\n\n☁ Météo : " + (short or "analyse et cartes dans l'e-mail")
+    return notify(title, body, 2, force=force, attachments=files, phone_message=phone)
+
+
 def report_loop() -> None:
     while True:
         try:
@@ -1346,10 +1448,21 @@ def report_loop() -> None:
             except OSError:
                 last = ""
             if dr.get("enabled") and lt.tm_hour == int(dr.get("hour", 20)) and last != today:
-                title, body = build_report()
-                notify(title, body, 2)
+                bulletin = None
+                if dr.get("meteo", True):
+                    # attendre le bulletin du matin (au plus METEO_WAIT_MIN minutes),
+                    # en ne le cherchant que toutes les 5 minutes
+                    if time.time() - _bulletin_try["t"] < 300 and lt.tm_min < METEO_WAIT_MIN:
+                        time.sleep(60)
+                        continue
+                    _bulletin_try["t"] = time.time()
+                    bulletin = fetch_bulletin(cfg)
+                    if bulletin is None and lt.tm_min < METEO_WAIT_MIN:
+                        time.sleep(60)
+                        continue
                 with open(REPORT_STATE, "w", encoding="utf-8") as f:
                     f.write(today)
+                send_daily_report(bulletin if bulletin is not None else False)
         except Exception:
             log.exception("Rapport quotidien")
         time.sleep(60)
@@ -1646,6 +1759,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, public_config(load_config()))
         elif path == "/api/monitor/report":
             title, body = build_report()
+            cfg = load_config()
+            if (cfg.get("daily_report") or {}).get("meteo", True):
+                body += build_meteo(cfg, with_files=False)[0] + "\n\n(Les cartes DWD seront jointes à l'e-mail.)"
             self._send(200, {"title": title, "body": body})
         elif path == "/api/wx/status":
             self._send(200, wx_status())
@@ -1701,8 +1817,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self._send(400, {"error": str(exc)})
         elif path == "/api/monitor/report":
-            title, body = build_report()
-            self._send(200, notify(title, body, 2, force=True))
+            self._send(200, send_daily_report(force=True))
         elif path == "/api/monitor/wefax":
             try:
                 self._send(200, save_pc_wefax(data if isinstance(data, dict) else {}))
