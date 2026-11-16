@@ -103,12 +103,12 @@ WEATHER_MAP_DEFAULT_ZOOM = 11
 
 # (clé, titre, sous-titre) des vignettes de l'écran d'accueil.
 HOME_TILES = [
-    ("weather", "Météo", "METAR local · Open-Meteo"),
+    ("weather", "Météo", "METAR · Open-Meteo · stations 433/868"),
     ("aircraft", "Trafic aérien", "ADS-B / readsb"),
     ("aprs", "APRS", "iGate LoRa + VHF 144,800"),
     ("ais", "AIS", "Trafic maritime"),
     ("beacon", "Balises de détresse", "406 · 121,5 · 121,375 MHz · goniométrie"),
-    ("s433", "Capteurs 433 MHz", "Stations météo, sondes, compteurs"),
+    ("s433", "Capteurs 433/868 MHz", "Stations météo, sondes, compteurs"),
     ("pocsag", "POCSAG", "Radiomessagerie · DAPNET 439,9875"),
     ("radiosonde", "Radiosondes", "Ballons météo · 400–406 MHz"),
     ("meteor", "Images satellites", "Meteor-M · SSTV de l'ISS"),
@@ -4837,13 +4837,13 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         head.pack(fill="x", padx=12, pady=(8, 6))
         h = head.inner
         h.configure(padding=12)
-        tk.Label(h, text="Capteurs 433 MHz (rtl_433)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
+        tk.Label(h, text="Capteurs 433 / 868 MHz (rtl_433)", bg=theme.BG_CARD, fg=theme.TEXT, font=theme.FONT_SECTION).pack(side="left")
         self.s433_pill = theme.pill(h, "INCONNU", theme.MUTED)
         self.s433_pill.pack(side="left", padx=(12, 0))
         self.s433_info = tk.Label(h, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.s433_info.pack(side="left", padx=(14, 0))
         ttk.Button(h, text="Effacer", style="Flat.TButton", command=self._s433_clear).pack(side="right")
-        ttk.Button(h, text="Écouter le 433 MHz", style="Accent.TButton",
+        ttk.Button(h, text="Écouter 433/868 MHz", style="Accent.TButton",
                    command=lambda: self._switch_sdr("433")).pack(side="right", padx=(0, 8))
 
         body = tk.Frame(outer, bg=theme.BG)
@@ -4944,7 +4944,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             rssi = f"{dev['rssi']:.0f} dB" if isinstance(dev.get("rssi"), (int, float)) else ""
             idc = f"{dev.get('id', '')}" + (f" / {dev['channel']}" if dev.get("channel") not in (None, "") else "")
             tree.insert("", "end", iid=dev["key"], tags=("old",) if now - ls > 3600 else (), values=(
-                self._s433_name(dev), dev.get("model") or "", idc,
+                self._s433_name(dev), (dev.get("model") or "") + (f"  ({dev['band']})" if dev.get("band") else ""), idc,
                 time.strftime("%H:%M:%S", time.localtime(ls)) if ls else "", dev.get("count", 0), batt, rssi,
                 self._s433_summary(dev.get("values") or {})))
         if self._s433_sel and tree.exists(self._s433_sel):

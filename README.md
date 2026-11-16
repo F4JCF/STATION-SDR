@@ -334,10 +334,16 @@ minutes et mesure le bruit de fond (`rtl_power`, gain fixe 30 dB) sur 118-137,
 historique dans /var/lib/meteor/noise.json. Fenêtre « Bruit radio… » (pages
 Images satellites et Statistiques) : courbes et écart à la médiane des 30 jours.
 
-## Station météo 433 MHz → APRS-WX
+## Stations météo 433 / 868 MHz → APRS-WX
 
-Page Météo, carte « Station météo locale (433 MHz) » : choix du capteur reçu par
-rtl_433. Si la publication est activée, `station_monitor` envoie toutes les
+Page Météo, carte « Stations météo 433 / 868 MHz » : rtl_433 décode les stations
+météo domestiques du voisinage (Oregon, LaCrosse, Bresser, Fine Offset…). Cases
+« Bandes écoutées » : 433,92 MHz et/ou 868,3 MHz ; avec les deux, rtl_433
+alterne toutes les 30 s (`-H 30`), réglage dans `/var/lib/rtl433/bands.json`
+(POST `/api/wx/bands` sur station_monitor ; rtl433_api relance rtl_433 tout
+seul). Bouton « Voisinage (N) » : tableau de toutes les stations reçues (bande,
+température, humidité, vent, pluie, pile, signal) ; double-clic pour choisir la
+sienne. Seule la station choisie peut être publiée. Si la publication est activée, `station_monitor` envoie toutes les
 10 min un paquet météo APRS (`F4JCF-13`, position de la station) sur APRS-IS
 (rotate.aprs2.net:14580), uniquement si les valeurs ont moins de 30 min.
 

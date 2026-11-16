@@ -382,7 +382,7 @@ LOG_UNITS = {
     "readsb": "ADS-B (readsb)", "direwolf": "APRS (Direwolf)", "ais-catcher": "AIS (AIS-catcher)",
     "svxlink": "SvxLink", "aprs-api": "API APRS", "svxlink-api": "API SvxLink", "sdr-switch": "Bascule de clé",
     "station-monitor": "Surveillance / notifications", "pat@f4jcf": "Winlink (Pat)", "docker:openwebrx": "OpenWebRX",
-    "beacon406": "Balises 406 MHz", "rtl433": "Capteurs 433 MHz", "direwolf-iss": "APRS ISS (145,825)",
+    "beacon406": "Balises 406 MHz", "rtl433": "Capteurs 433/868 MHz", "direwolf-iss": "APRS ISS (145,825)",
     "elt121": "Veille 121,5 MHz",
     "pocsag": "POCSAG (multimon-ng)",
     "docker:radiosonde_auto_rx": "Radiosondes (auto_rx)",

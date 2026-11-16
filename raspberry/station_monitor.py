@@ -397,6 +397,7 @@ def event_once(key: str, cooldown: float) -> bool:
 # valeurs de moins de 30 minutes, au plus toutes les 10 minutes.
 
 RTL433_STORE = os.environ.get("RTL433_STORE", "/var/lib/rtl433/devices.json")
+RTL433_BANDS = os.environ.get("RTL433_BANDS", "/var/lib/rtl433/bands.json")
 APRS_IS = ("rotate.aprs2.net", 14580)
 _wx = {"last_sent": None, "last_packet": None, "last_error": None, "rain": []}
 
@@ -474,7 +475,9 @@ def wx_candidates() -> list:
         vals = wx_values(d)
         if "temp_c" in vals or "humidity" in vals or "wind_kmh" in vals:
             out.append({"key": key, "model": d.get("model"), "id": d.get("id"), "channel": d.get("channel"),
-                        "last_seen": d.get("last_seen"), "values": vals})
+                        "last_seen": d.get("last_seen"), "first_seen": d.get("first_seen"), "count": d.get("count"),
+                        "band": d.get("band") or "433", "rssi": d.get("rssi"), "battery_ok": d.get("battery_ok"),
+                        "values": vals})
     out.sort(key=lambda d: -(d.get("last_seen") or 0))
     return out
 
@@ -550,6 +553,33 @@ def aprs_is_send(call: str, lines: list) -> None:
         time.sleep(1)
 
 
+def wx_bands() -> dict:
+    conf = {"bands": ["433", "868"], "hop": 30}
+    try:
+        with open(RTL433_BANDS, encoding="utf-8") as f:
+            data = json.load(f)
+        b = [x for x in data.get("bands") or [] if x in ("433", "868")]
+        if b:
+            conf["bands"] = b
+        conf["hop"] = max(10, min(600, int(data.get("hop") or 30)))
+    except (OSError, ValueError, TypeError):
+        pass
+    return conf
+
+
+def wx_set_bands(data: dict) -> dict:
+    b = [x for x in (data.get("bands") or []) if x in ("433", "868")]
+    if not b:
+        raise ValueError("choisissez au moins une bande")
+    conf = {"bands": sorted(set(b)), "hop": max(10, min(600, int(data.get("hop") or 30)))}
+    os.makedirs(os.path.dirname(RTL433_BANDS), exist_ok=True)
+    tmp = RTL433_BANDS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(conf, f)
+    os.replace(tmp, RTL433_BANDS)
+    return conf
+
+
 def wx_status() -> dict:
     cfg = load_config()
     w = cfg["wx"]
@@ -557,7 +587,7 @@ def wx_status() -> dict:
     sel = next((c for c in cands if c["key"] == w.get("device")), None)
     return {"config": w, "call": f"{cfg['mycall'].split('-')[0]}-{w.get('ssid') or '13'}", "devices": cands,
             "selected": sel, "last_sent": _wx["last_sent"], "last_packet": _wx["last_packet"],
-            "last_error": _wx["last_error"]}
+            "last_error": _wx["last_error"], "bands": wx_bands()}
 
 
 def wx_loop() -> None:
@@ -578,7 +608,7 @@ def wx_loop() -> None:
                         _wx.update(last_sent=time.time(), last_packet=pkt, last_error=None)
                         log.info("APRS-WX : %s", pkt)
                 elif dev and not fresh:
-                    _wx["last_error"] = "valeurs de plus de 30 min (clé hors 433 MHz) : envoi suspendu"
+                    _wx["last_error"] = "valeurs de plus de 30 min (clé hors module 433/868 MHz) : envoi suspendu"
         except Exception as exc:
             _wx["last_error"] = str(exc)
             log.warning("APRS-WX : %s", exc)
@@ -1794,6 +1824,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, proxy_sdr_mode(mode))
             except Exception as exc:
                 self._send(502, {"error": str(exc)})
+        elif path == "/api/wx/bands":
+            try:
+                self._send(200, {"ok": True, "bands": wx_set_bands(data if isinstance(data, dict) else {})})
+            except (ValueError, OSError, TypeError) as exc:
+                self._send(400, {"error": str(exc)})
         elif path == "/api/wx/config":
             cfg = update_config({"wx": data.get("wx") if isinstance(data.get("wx"), dict) else data})
             if isinstance(data, dict) and data.get("send_now"):
