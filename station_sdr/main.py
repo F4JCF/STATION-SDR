@@ -4864,6 +4864,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.s433_info = tk.Label(h, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.s433_info.pack(side="left", padx=(14, 0))
         ttk.Button(h, text="Effacer", style="Flat.TButton", command=self._s433_clear).pack(side="right")
+        self.s433_hide_tpms = tk.BooleanVar(value=self.config_data.get("s433_hide_tpms", True))
+        tk.Checkbutton(h, text="Masquer les pneus de voitures (TPMS)", variable=self.s433_hide_tpms,
+                       command=self._s433_toggle_tpms, bg=theme.BG_CARD, fg=theme.TEXT,
+                       selectcolor=theme.BG_CARD_ALT, activebackground=theme.BG_CARD, activeforeground=theme.TEXT,
+                       font=theme.FONT_BODY, highlightthickness=0).pack(side="right", padx=(0, 12))
         ttk.Button(h, text="Écouter 433/868 MHz", style="Accent.TButton",
                    command=lambda: self._switch_sdr("433")).pack(side="right", padx=(0, 8))
 
@@ -4903,6 +4908,29 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self._s433_devices = []
         self._s433_sel = None
         self._s433_poll_running = False
+
+    TPMS_MODELS = ("renault", "toyota", "abarth", "schrader", "ford", "hyundai", "citroen", "peugeot", "pmv",
+                   "jansite", "truck", "kia", "bmw", "porsche", "steelmate", "elantra", "gm-aftermarket", "tyre",
+                   "tire")
+
+    @classmethod
+    def _s433_is_tpms(cls, dev):
+        v = dev.get("values") or {}
+        model = str(dev.get("model", "")).lower()
+        if str(v.get("type", "")).upper() == "TPMS" or "tpms" in model:
+            return True
+        if any(k in v for k in ("pressure_kPa", "pressure_PSI", "pressure_bar")) and "humidity" not in v:
+            return True
+        return model.startswith(cls.TPMS_MODELS)
+
+    def _s433_toggle_tpms(self):
+        self.config_data["s433_hide_tpms"] = bool(self.s433_hide_tpms.get())
+        try:
+            save_config(self.config_data)
+        except Exception:
+            pass
+        if getattr(self, "_s433_all", None) is not None:
+            self._render_s433(self._s433_all, None)
 
     def _s433_name(self, dev):
         return (self.config_data.get("sensor_names") or {}).get(dev.get("key"), "")
@@ -4948,6 +4976,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                 self.s433_pill.config(text="  NON INSTALLÉ / INJOIGNABLE  ", bg=theme.MUTED)
                 self.s433_info.config(text="Service rtl433 (port 5010) injoignable : installez-le depuis Santé du Pi → « Modules du Pi… ».")
             return
+        self._s433_all = data
         st = data["status"]
         self.s433_pill.config(text="  ÉCOUTE  " if st.get("running") else "  ARRÊTÉ  ",
                               bg=theme.GREEN if st.get("running") else theme.RED)
@@ -4955,7 +4984,12 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
                                     f"{st.get('active_last_hour', 0)} actif(s) la dernière heure  ·  "
                                     f"{st.get('messages', 0)} message(s) depuis le démarrage"
                                     + (f"  ·  ⚠ {st['error']}" if st.get("error") else "")))
-        self._s433_devices = data["devices"] or []
+        all_devs = data["devices"] or []
+        hide = bool(self.s433_hide_tpms.get())
+        self._s433_devices = [d for d in all_devs if not (hide and self._s433_is_tpms(d))]
+        n_tpms = sum(1 for d in all_devs if self._s433_is_tpms(d))
+        if hide and n_tpms:
+            self.s433_info.config(text=self.s433_info.cget("text") + f"  ·  {n_tpms} pneu(s) masqué(s)")
         tree = self.s433_tree
         tree.delete(*tree.get_children())
         now = time.time()

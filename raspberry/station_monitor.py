@@ -467,10 +467,25 @@ def wx_values(dev: dict) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
+TPMS_MODELS = ("renault", "toyota", "abarth", "schrader", "ford", "hyundai", "citroen", "peugeot", "pmv",
+               "jansite", "truck", "kia", "bmw", "porsche", "steelmate", "elantra", "gm-aftermarket", "tyre", "tire")
+
+
+def is_tpms(dev: dict) -> bool:
+    """Capteur de pression de pneu (voiture qui passe) : pas une station météo."""
+    v = dev.get("values") or {}
+    model = str(dev.get("model", "")).lower()
+    if str(v.get("type", "")).upper() == "TPMS" or "tpms" in model:
+        return True
+    if any(k in v for k in ("pressure_kPa", "pressure_PSI", "pressure_bar")) and "humidity" not in v:
+        return True
+    return model.startswith(TPMS_MODELS)
+
+
 def wx_candidates() -> list:
     out = []
     for key, d in wx_devices().items():
-        if "tpms" in str(d.get("model", "")).lower():
+        if is_tpms(d):
             continue                      # capteurs de pneus : pas une station météo
         vals = wx_values(d)
         if "temp_c" in vals or "humidity" in vals or "wind_kmh" in vals:
