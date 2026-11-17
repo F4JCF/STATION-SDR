@@ -3530,6 +3530,9 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.alerts_summary = tk.Label(head, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_BODY)
         self.alerts_summary.pack(side="left", padx=(16, 0))
         ttk.Button(head, text="Effacer l'historique", style="Flat.TButton", command=self._clear_alerts).pack(side="right")
+        self._notify_btn = ttk.Button(head, text="Notifications téléphone / e-mail ▸", style="Accent.TButton",
+                                      command=self._toggle_notify_card)
+        self._notify_btn.pack(side="right", padx=(0, 8))
         ttk.Button(head, text="Tester l'alerte", style="Flat.TButton",
                    command=lambda: self._raise_alert(f"test:{time.time()}", "Test d'alerte",
                                                      "Ceci est un test : la fenêtre et le son fonctionnent.", cooldown=0),
@@ -3551,10 +3554,13 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
             ), bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE, justify="left", wraplength=theme.px(1300),
         ).pack(anchor="w", padx=14, pady=10)
 
-        self._build_notify_card(wrapper)
+        self._notify_outer = self._build_notify_card(wrapper)
+        self._notify_outer.pack_forget()
+        self._notify_open = False
 
         table_outer = theme.card(wrapper)
         table_outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self._alerts_table_outer = table_outer
         self.alerts_tree = ttk.Treeview(table_outer.inner, columns=("time", "title", "text"), show="headings")
         for col, txt, w in (("time", "Date", 140), ("title", "Alerte", 300), ("text", "Détail", 760)):
             self.alerts_tree.heading(col, text=txt)
@@ -3562,6 +3568,15 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.alerts_tree.tag_configure("recent", foreground=theme.RED)
         self.alerts_tree.pack(fill="both", expand=True, padx=1, pady=1)
         self._refresh_alerts_page()
+
+    def _toggle_notify_card(self):
+        self._notify_open = not self._notify_open
+        if self._notify_open:
+            self._notify_outer.pack(fill="x", padx=12, pady=(0, 8), before=self._alerts_table_outer)
+            self._notify_btn.config(text="Notifications téléphone / e-mail ▾", style="Flat.TButton")
+        else:
+            self._notify_outer.pack_forget()
+            self._notify_btn.config(text="Notifications téléphone / e-mail ▸", style="Accent.TButton")
 
     def _refresh_alerts_page(self):
         if not hasattr(self, "alerts_tree"):
@@ -4301,6 +4316,7 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.nt_status = tk.Label(btns, text="", bg=theme.BG_CARD, fg=theme.MUTED, font=theme.FONT_SUBTITLE)
         self.nt_status.pack(side="left", padx=(8, 0))
         self._notify_loaded = False
+        return outer
 
     def _gh_send_now(self):
         host, port = self._monitor_endpoint()
