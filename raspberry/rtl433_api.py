@@ -15,6 +15,7 @@ Lance rtl_433 (sortie JSON) et expose (port RTL433_PORT, 5010) :
 
 import collections
 import json
+import re
 import logging
 import os
 import shutil
@@ -64,7 +65,7 @@ def save():
 def load():
     try:
         with open(STORE, "r", encoding="utf-8") as f:
-            devices.update(json.load(f))
+            devices.update({k: v for k, v in json.load(f).items() if isinstance(v, dict) and v.get("model")})
     except (OSError, ValueError):
         pass
 
@@ -89,6 +90,16 @@ def _mtime():
         return os.path.getmtime(BANDS_FILE)
     except OSError:
         return 0
+
+
+def _band_of_hz(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    if v > 1e6:
+        v /= 1e6
+    return "868" if v > 600 else "433"
 
 
 def band_of(msg, current):
@@ -145,15 +156,56 @@ def run():
                     return
         threading.Thread(target=watch_conf, daemon=True).start()
         default_band = conf["bands"][0]
+        state["tuned"] = default_band
+        alive = {"t": time.time()}
         err = collections.deque(maxlen=10)
-        threading.Thread(target=lambda: [err.append(l.rstrip()) for l in proc.stderr], daemon=True).start()
+
+        def read_err(p=proc):
+            for l in p.stderr:
+                l = l.rstrip()
+                if l:
+                    err.append(l)
+                    alive["t"] = time.time()
+                    state["last_log"] = l[-200:]
+                    m = re.search(r"Tuned to ([0-9.]+)\s*MHz", l)
+                    if m:
+                        state["tuned"] = _band_of_hz(m.group(1))
+        threading.Thread(target=read_err, daemon=True).start()
+
+        def watch_silence(p=proc, hop=conf["hop"], hopping=len(conf["bands"]) > 1):
+            # En alternance, rtl_433 annonce chaque changement de fréquence :
+            # s'il ne dit plus rien, il est bloqué -> on le relance.
+            limit = 3 * hop + 90 if hopping else 1800
+            while p.poll() is None:
+                time.sleep(15)
+                if time.time() - alive["t"] > limit:
+                    log.warning("rtl_433 muet depuis %.0f s : relance", time.time() - alive["t"])
+                    state["restarts"] = state.get("restarts", 0) + 1
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    return
+        threading.Thread(target=watch_silence, daemon=True).start()
         for line in proc.stdout:
             line = line.strip()
+            alive["t"] = time.time()
             if not line.startswith("{"):
                 continue
             try:
                 msg = json.loads(line)
             except ValueError:
+                continue
+            if not msg.get("model"):
+                # message de journal de rtl_433 (ex. « Tuned to 868.300MHz. ») : pas un capteur
+                txt = str(msg.get("msg") or "")
+                if txt:
+                    state["last_log"] = txt[:200]
+                m = re.search(r"Tuned to ([0-9.]+)\s*MHz", txt)
+                if m:
+                    state["tuned"] = _band_of_hz(m.group(1))
+                elif msg.get("center_frequency"):
+                    state["tuned"] = _band_of_hz(msg["center_frequency"])
                 continue
             now = time.time()
             msg["_rx"] = now
@@ -165,7 +217,7 @@ def run():
                                          "channel": msg.get("channel"), "first_seen": now, "count": 0, "values": {}}
                 d["count"] += 1
                 d["last_seen"] = now
-                d["band"] = band_of(msg, default_band if len(conf["bands"]) == 1 else d.get("band", default_band))
+                d["band"] = band_of(msg, state.get("tuned") or default_band)
                 for k in ("rssi", "snr", "battery_ok", "freq"):
                     if k in msg:
                         d[k] = msg[k]

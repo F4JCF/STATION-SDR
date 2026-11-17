@@ -4983,8 +4983,11 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.s433_info.config(text=(f"{st.get('freq')}  ·  {st.get('devices', 0)} capteur(s), dont "
                                     f"{st.get('active_last_hour', 0)} actif(s) la dernière heure  ·  "
                                     f"{st.get('messages', 0)} message(s) depuis le démarrage"
+                                    + (f"  ·  écoute en ce moment : {st['tuned']} MHz"
+                                       if st.get("tuned") and len(st.get("bands") or []) > 1 else "")
+                                    + (f"  ·  relancé {st['restarts']} fois (bloqué)" if st.get("restarts") else "")
                                     + (f"  ·  ⚠ {st['error']}" if st.get("error") else "")))
-        all_devs = data["devices"] or []
+        all_devs = [d for d in (data["devices"] or []) if d.get("model")]
         hide = bool(self.s433_hide_tpms.get())
         self._s433_devices = [d for d in all_devs if not (hide and self._s433_is_tpms(d))]
         n_tpms = sum(1 for d in all_devs if self._s433_is_tpms(d))
