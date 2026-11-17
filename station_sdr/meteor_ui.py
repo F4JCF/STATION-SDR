@@ -312,7 +312,7 @@ class MeteorMixin:
                 cv.create_image(0, 0, anchor="nw", image=cv._ph)
                 cv.configure(scrollregion=(0, 0, im2.width, im2.height))
             cv.bind("<Configure>", fit)
-            cv.bind_all("<MouseWheel>", lambda e: cv.yview_scroll(int(-e.delta / 120), "units"))
+            win.bind("<MouseWheel>", lambda e: cv.yview_scroll(int(-e.delta / 120), "units"))
 
         threading.Thread(target=worker, daemon=True).start()
 

@@ -48,6 +48,7 @@ from .mission_ui import MissionMixin
 from .meteor_ui import MeteorMixin
 from .noise_ui import NoiseMixin
 from .wx433_ui import Wx433Mixin
+from .scrollpage import ScrollPage, install_wheel
 from .aprsmsg_ui import AprsMsgMixin
 from .profiles_ui import ProfilesMixin
 from .spots_ui import SpotsMixin
@@ -1113,14 +1114,19 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         self.page_area = tk.Frame(container, bg=theme.BG)
         self.page_area.pack(fill="both", expand=True)
 
-        self.home_frame = tk.Frame(self.page_area, bg=theme.BG)
+        # Chaque vue est défilable si elle dépasse la hauteur de la fenêtre.
+        home_sp = ScrollPage(self.page_area, theme.BG)
+        self.home_frame = home_sp.inner
+        self._scrollpages = {None: home_sp}
         # Une page par vignette, sauf celles listées dans EXTERNAL_TILES
         # (ouvrent une page web externe plutôt qu'une vue interne).
-        self.pages = {
-            key: tk.Frame(self.page_area, bg=theme.BG)
-            for key, _title, _subtitle in HOME_TILES
-            if key not in EXTERNAL_TILES
-        }
+        self.pages = {}
+        for key, _title, _subtitle in HOME_TILES:
+            if key not in EXTERNAL_TILES:
+                sp = ScrollPage(self.page_area, theme.BG)
+                self._scrollpages[key] = sp
+                self.pages[key] = sp.inner
+        install_wheel(self, lambda: self._scrollpages.get(getattr(self, "_current_view", None)))
 
         self._build_home_tiles()
         self._build_weather_tab(self.pages["weather"])
@@ -1415,16 +1421,15 @@ class App(SaterMixin, PocsagMixin, MaintMixin, FeedsMixin, RadiosondeMixin, Miss
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_view(self, key):
-        self.home_frame.pack_forget()
-        for page in self.pages.values():
-            page.pack_forget()
+        for sp in self._scrollpages.values():
+            sp.shell.pack_forget()
 
         if key is None:
-            self.home_frame.pack(fill="both", expand=True)
+            self._scrollpages[None].shell.pack(fill="both", expand=True)
             self.view_title_label.config(text="Accueil")
             self.back_button.pack_forget()
         else:
-            self.pages[key].pack(fill="both", expand=True)
+            self._scrollpages[key].shell.pack(fill="both", expand=True)
             titles = {k: t for k, t, _ in HOME_TILES}
             self.view_title_label.config(text=titles.get(key, key))
             self.back_button.pack(side="left", padx=(0, 12), before=self.view_title_label)
