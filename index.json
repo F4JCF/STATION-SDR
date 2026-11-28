@@ -1,0 +1,357 @@
+{
+ "recupere_utc": "2026-11-28T12:22",
+ "derniere": "202611280600",
+ "cartes": [
+  {
+   "analyse_utc": "2026-11-27 12:00",
+   "nb": "DWD_20261127-1200_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-27 18:00",
+   "nb": "DWD_20261127-1800_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-28 00:00",
+   "nb": "DWD_20261128-0000_nb.png"
+  },
+  {
+   "analyse_utc": "2026-11-28 06:00",
+   "nb": "DWD_20261128-0600_nb.png",
+   "couleur": "DWD_20261128-0600_couleur.png"
+  }
+ ],
+ "previsions": [
+  {
+   "type": "pression",
+   "run_utc": "2026-11-28 00:00",
+   "echeance_h": 36,
+   "valable_utc": "2026-11-29 12:00",
+   "fichier": "PREV_pression_20261129-1200.png"
+  },
+  {
+   "type": "pression",
+   "run_utc": "2026-11-28 00:00",
+   "echeance_h": 60,
+   "valable_utc": "2026-11-30 12:00",
+   "fichier": "PREV_pression_20261130-1200.png"
+  },
+  {
+   "type": "pression",
+   "run_utc": "2026-11-28 00:00",
+   "echeance_h": 84,
+   "valable_utc": "2026-12-01 12:00",
+   "fichier": "PREV_pression_20261201-1200.png"
+  },
+  {
+   "type": "pluie24h",
+   "run_utc": "2026-11-28 00:00",
+   "echeance_h": 30,
+   "valable_utc": "2026-11-29 06:00",
+   "fichier": "PREV_pluie24h_20261129-0600.png"
+  },
+  {
+   "type": "pluie24h",
+   "run_utc": "2026-11-28 00:00",
+   "echeance_h": 54,
+   "valable_utc": "2026-11-30 06:00",
+   "fichier": "PREV_pluie24h_20261130-0600.png"
+  },
+  {
+   "type": "pluie24h",
+   "run_utc": "2026-11-28 00:00",
+   "echeance_h": 78,
+   "valable_utc": "2026-12-01 06:00",
+   "fichier": "PREV_pluie24h_20261201-0600.png"
+  }
+ ],
+ "vigilance": {
+  "source": "MeteoAlarm (Météo-France)",
+  "departement": "Alpes-Maritimes",
+  "alertes": [
+   {
+    "evenement": "Vigilance jaune avalanches",
+    "niveau": "2; yellow; Moderate",
+    "debut": "2026-11-28T06:00:07+01:00",
+    "fin": "2026-11-29T00:00:00+01:00",
+    "description": "Des phénomènes habituels dans la région mais occasionnellement et localement dangereux sont prévus (exemple : mistral, orage d'été, montée des eaux, fortes vagues submergeant le littoral)."
+   }
+  ],
+  "statut": "ok"
+ },
+ "propagation": {
+  "flux_10cm": [
+   {
+    "time_tag": "2026-11-27T17:00:00",
+    "frequency": 2800,
+    "flux": 91.0,
+    "reporting_schedule": "Morning",
+    "avg_begin_date": null,
+    "ninety_day_mean": null,
+    "rec_count": null
+   },
+   {
+    "time_tag": "2026-11-27T20:00:00",
+    "frequency": 2800,
+    "flux": 91.0,
+    "reporting_schedule": "Noon",
+    "avg_begin_date": "2026-08-30T20:00:00",
+    "ninety_day_mean": 108.0,
+    "rec_count": 90
+   },
+   {
+    "time_tag": "2026-11-27T22:00:00",
+    "frequency": 2800,
+    "flux": 91.0,
+    "reporting_schedule": "Afternoon",
+    "avg_begin_date": null,
+    "ninety_day_mean": null,
+    "rec_count": null
+   }
+  ],
+  "kp_3h": [
+   {
+    "time_tag": "2026-11-27T09:00:00",
+    "Kp": 0.33,
+    "a_running": 2,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-27T12:00:00",
+    "Kp": 0.33,
+    "a_running": 2,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-27T15:00:00",
+    "Kp": 0.33,
+    "a_running": 2,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-27T18:00:00",
+    "Kp": 1.0,
+    "a_running": 4,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-27T21:00:00",
+    "Kp": 2.33,
+    "a_running": 9,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-28T00:00:00",
+    "Kp": 4.0,
+    "a_running": 27,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-28T03:00:00",
+    "Kp": 2.67,
+    "a_running": 12,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-28T06:00:00",
+    "Kp": 3.33,
+    "a_running": 18,
+    "station_count": 8
+   },
+   {
+    "time_tag": "2026-11-28T09:00:00",
+    "Kp": 3.33,
+    "a_running": 18,
+    "station_count": 8
+   }
+  ],
+  "echelles_noaa": {
+   "0": {
+    "DateStamp": "2026-11-28",
+    "TimeStamp": "12:21:00",
+    "R": {
+     "Scale": "0",
+     "Text": "none",
+     "MinorProb": null,
+     "MajorProb": null
+    },
+    "S": {
+     "Scale": "0",
+     "Text": "none",
+     "Prob": null
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "1": {
+    "DateStamp": "2026-11-28",
+    "TimeStamp": "12:21:00",
+    "R": {
+     "Scale": null,
+     "Text": null,
+     "MinorProb": "5",
+     "MajorProb": "1"
+    },
+    "S": {
+     "Scale": null,
+     "Text": null,
+     "Prob": "1"
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "2": {
+    "DateStamp": "2026-11-29",
+    "TimeStamp": "00:00:00",
+    "R": {
+     "Scale": null,
+     "Text": null,
+     "MinorProb": "5",
+     "MajorProb": "1"
+    },
+    "S": {
+     "Scale": null,
+     "Text": null,
+     "Prob": "1"
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "3": {
+    "DateStamp": "2026-11-30",
+    "TimeStamp": "00:00:00",
+    "R": {
+     "Scale": null,
+     "Text": null,
+     "MinorProb": "5",
+     "MajorProb": "1"
+    },
+    "S": {
+     "Scale": null,
+     "Text": null,
+     "Prob": "1"
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   },
+   "-1": {
+    "DateStamp": "2026-11-27",
+    "TimeStamp": "12:21:00",
+    "R": {
+     "Scale": "0",
+     "Text": "none",
+     "MinorProb": null,
+     "MajorProb": null
+    },
+    "S": {
+     "Scale": "0",
+     "Text": "none",
+     "Prob": null
+    },
+    "G": {
+     "Scale": "0",
+     "Text": "none"
+    }
+   }
+  },
+  "hamqsl": {
+   "source": "N0NBH",
+   "updated": "28 Nov 2026 1222 GMT",
+   "solarflux": "91",
+   "aindex": "4",
+   "kindex": "3",
+   "kindexnt": "No Report",
+   "xray": "B4.6",
+   "sunspots": "46",
+   "heliumline": "106.3",
+   "protonflux": "14",
+   "electonflux": "2590",
+   "aurora": "3",
+   "normalization": "1.99",
+   "latdegree": "65.6",
+   "solarwind": "465.8",
+   "magneticfield": "3.5",
+   "geomagfield": "UNSETTLD",
+   "signalnoise": "S2-S3",
+   "fof2": "",
+   "muffactor": "",
+   "muf": "NoRpt",
+   "bandes_hf": [
+    {
+     "bandes": "80m-40m",
+     "moment": "day",
+     "etat": "Poor"
+    },
+    {
+     "bandes": "30m-20m",
+     "moment": "day",
+     "etat": "Good"
+    },
+    {
+     "bandes": "17m-15m",
+     "moment": "day",
+     "etat": "Fair"
+    },
+    {
+     "bandes": "12m-10m",
+     "moment": "day",
+     "etat": "Poor"
+    },
+    {
+     "bandes": "80m-40m",
+     "moment": "night",
+     "etat": "Fair"
+    },
+    {
+     "bandes": "30m-20m",
+     "moment": "night",
+     "etat": "Good"
+    },
+    {
+     "bandes": "17m-15m",
+     "moment": "night",
+     "etat": "Fair"
+    },
+    {
+     "bandes": "12m-10m",
+     "moment": "night",
+     "etat": "Poor"
+    }
+   ],
+   "vhf": [
+    {
+     "phenomene": "vhf-aurora",
+     "zone": "northern_hemi",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "europe",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "north_america",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "europe_6m",
+     "etat": "Band Closed"
+    },
+    {
+     "phenomene": "E-Skip",
+     "zone": "europe_4m",
+     "etat": "Band Closed"
+    }
+   ]
+  }
+ }
+}
